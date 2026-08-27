@@ -9,8 +9,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Weak};
 
 use buzz_core::kind::KIND_STREAM_MESSAGE;
-use buzz_core::tenant::CommunityId;
-use buzz_workflow::action_sink::{ActionSink, ActionSinkError};
+use buzz_core::workflow_wake::WorkflowMentionWake;
+use buzz_workflow::action_sink::{ActionSink, ActionSinkError, WorkflowMessageContext};
 use chrono::Utc;
 use nostr::{EventBuilder, Kind, Tag};
 use tracing::info;
@@ -172,12 +172,18 @@ impl RelayActionSink {
 impl ActionSink for RelayActionSink {
     fn send_message(
         &self,
-        community_id: CommunityId,
+        context: WorkflowMessageContext,
         channel_id: &str,
         text: &str,
         author_pubkey: &str,
         reply_to: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = Result<String, ActionSinkError>> + Send + '_>> {
+        let WorkflowMessageContext {
+            community_id,
+            run_id,
+            step_id,
+            definition_event_id,
+        } = context;
         let channel_id = channel_id.to_owned();
         let text = text.to_owned();
         let author_pubkey = author_pubkey.to_owned();
@@ -334,13 +340,42 @@ impl ActionSink for RelayActionSink {
                     Some((name, nostr::PublicKey::from_slice(&u.pubkey).ok()?.to_hex()))
                 })
                 .collect();
+            let mut mentioned_pubkeys = Vec::new();
             for mentioned in resolve_mention_pubkeys(&text, &named_members) {
                 if mentioned == author_pubkey_hex {
                     continue;
                 }
+                let mentioned_pubkey = nostr::PublicKey::from_hex(&mentioned)
+                    .map_err(|e| ActionSinkError::EventBuild(format!("mention pubkey: {e}")))?;
                 tags.push(
                     Tag::parse(["p", &mentioned])
                         .map_err(|e| ActionSinkError::EventBuild(format!("mention p tag: {e}")))?,
+                );
+                mentioned_pubkeys.push(mentioned_pubkey);
+            }
+
+            let definition_event_id = definition_event_id
+                .as_deref()
+                .map(nostr::EventId::from_slice)
+                .transpose()
+                .map_err(|e| {
+                    ActionSinkError::InvalidInput(format!("invalid definition event id: {e}"))
+                })?;
+            if let Some(definition_event_id) = definition_event_id {
+                tags.push(
+                    Tag::parse(["workflow-run", &run_id.to_string()]).map_err(|e| {
+                        ActionSinkError::EventBuild(format!("workflow run tag: {e}"))
+                    })?,
+                );
+                tags.push(
+                    Tag::parse(["workflow-definition", &definition_event_id.to_hex()]).map_err(
+                        |e| ActionSinkError::EventBuild(format!("workflow definition tag: {e}")),
+                    )?,
+                );
+                tags.push(
+                    Tag::parse(["workflow-step", &step_id]).map_err(|e| {
+                        ActionSinkError::EventBuild(format!("workflow step tag: {e}"))
+                    })?,
                 );
             }
 
@@ -411,6 +446,23 @@ impl ActionSink for RelayActionSink {
                 )
                 .await;
 
+                for wake in build_workflow_wakes(
+                    &state.relay_keypair,
+                    channel_uuid,
+                    run_id,
+                    definition_event_id,
+                    event.id,
+                    mentioned_pubkeys,
+                )? {
+                    crate::handlers::event::dispatch_ephemeral_event(
+                        &tenant,
+                        &state,
+                        wake,
+                        Some(channel_uuid),
+                    )
+                    .await;
+                }
+
                 // A threaded reply changed its thread's counters — push a fresh
                 // relay-signed kind:39005 so subscribed clients update badge
                 // counts without refetching the head window, exactly as the
@@ -431,6 +483,33 @@ impl ActionSink for RelayActionSink {
     }
 }
 
+fn build_workflow_wakes(
+    relay_keys: &nostr::Keys,
+    channel_id: Uuid,
+    run_id: Uuid,
+    definition_event_id: Option<nostr::EventId>,
+    message_event_id: nostr::EventId,
+    recipients: Vec<nostr::PublicKey>,
+) -> Result<Vec<nostr::Event>, ActionSinkError> {
+    let Some(definition_event_id) = definition_event_id else {
+        return Ok(Vec::new());
+    };
+    recipients
+        .into_iter()
+        .map(|recipient| {
+            WorkflowMentionWake::new(
+                recipient,
+                channel_id,
+                run_id,
+                definition_event_id,
+                message_event_id,
+            )
+            .sign(relay_keys)
+            .map_err(|error| ActionSinkError::EventBuild(format!("workflow wake: {error}")))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,6 +521,62 @@ mod tests {
     // A 64-char hex pubkey built from a single repeated nibble, for readable tests.
     fn pk(nibble: char) -> String {
         std::iter::repeat_n(nibble, 64).collect()
+    }
+
+    #[test]
+    fn legacy_message_without_revision_emits_no_wake() {
+        let relay = nostr::Keys::generate();
+        let recipient = nostr::Keys::generate().public_key();
+        let message = nostr::EventBuilder::text_note("message")
+            .sign_with_keys(&relay)
+            .expect("message");
+        let wakes = build_workflow_wakes(
+            &relay,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            None,
+            message.id,
+            vec![recipient],
+        )
+        .expect("legacy wake build");
+        assert!(wakes.is_empty());
+    }
+
+    #[test]
+    fn revision_bound_message_emits_one_identifier_wake_per_recipient() {
+        let relay = nostr::Keys::generate();
+        let recipients = [
+            nostr::Keys::generate().public_key(),
+            nostr::Keys::generate().public_key(),
+        ];
+        let channel = Uuid::new_v4();
+        let run = Uuid::new_v4();
+        let definition = nostr::EventBuilder::text_note("definition")
+            .sign_with_keys(&nostr::Keys::generate())
+            .expect("definition");
+        let message = nostr::EventBuilder::text_note("message")
+            .sign_with_keys(&relay)
+            .expect("message");
+        let wakes = build_workflow_wakes(
+            &relay,
+            channel,
+            run,
+            Some(definition.id),
+            message.id,
+            recipients.to_vec(),
+        )
+        .expect("wake build");
+        assert_eq!(wakes.len(), recipients.len());
+        for (event, recipient) in wakes.iter().zip(recipients) {
+            let wake = WorkflowMentionWake::parse(event).expect("canonical wake");
+            assert!(event.content.is_empty());
+            assert_eq!(event.pubkey, relay.public_key());
+            assert_eq!(wake.recipient(), recipient);
+            assert_eq!(wake.channel_id(), channel);
+            assert_eq!(wake.run_id(), run);
+            assert_eq!(wake.definition_event_id(), definition.id);
+            assert_eq!(wake.message_event_id(), message.id);
+        }
     }
 
     #[test]
@@ -739,7 +874,12 @@ mod integration_tests {
         let sink = RelayActionSink::new(&state);
         let event_id_hex = sink
             .send_message(
-                community,
+                WorkflowMessageContext {
+                    community_id: community,
+                    run_id: Uuid::new_v4(),
+                    step_id: "test-step".into(),
+                    definition_event_id: None,
+                },
                 &channel.id.to_string(),
                 "heads up @Robby — please take a look",
                 &author_hex,
@@ -815,7 +955,12 @@ mod integration_tests {
         // 1. A top-level workflow message becomes the thread root.
         let root_hex = sink
             .send_message(
-                community,
+                WorkflowMessageContext {
+                    community_id: community,
+                    run_id: Uuid::new_v4(),
+                    step_id: "test-step".into(),
+                    definition_event_id: None,
+                },
                 &channel.id.to_string(),
                 "root message",
                 &author_hex,
@@ -827,7 +972,12 @@ mod integration_tests {
         // 2. A reply_in_thread message threads onto it.
         let reply_hex = sink
             .send_message(
-                community,
+                WorkflowMessageContext {
+                    community_id: community,
+                    run_id: Uuid::new_v4(),
+                    step_id: "test-step".into(),
+                    definition_event_id: None,
+                },
                 &channel.id.to_string(),
                 "threaded reply",
                 &author_hex,
@@ -969,7 +1119,12 @@ mod integration_tests {
         // A workflow reply onto the metadata-less nested parent.
         let reply_hex = RelayActionSink::new(&state)
             .send_message(
-                community,
+                WorkflowMessageContext {
+                    community_id: community,
+                    run_id: Uuid::new_v4(),
+                    step_id: "test-step".into(),
+                    definition_event_id: None,
+                },
                 &channel_hex,
                 "workflow reply",
                 &author_hex,
@@ -1050,7 +1205,12 @@ mod integration_tests {
 
         let root_only_reply_hex = RelayActionSink::new(&state)
             .send_message(
-                community,
+                WorkflowMessageContext {
+                    community_id: community,
+                    run_id: Uuid::new_v4(),
+                    step_id: "test-step".into(),
+                    definition_event_id: None,
+                },
                 &channel_hex,
                 "workflow reply to root-only parent",
                 &author_hex,
@@ -1112,7 +1272,12 @@ mod integration_tests {
         let unknown = nostr::Keys::generate().public_key().to_hex();
         let err = RelayActionSink::new(&state)
             .send_message(
-                community,
+                WorkflowMessageContext {
+                    community_id: community,
+                    run_id: Uuid::new_v4(),
+                    step_id: "test-step".into(),
+                    definition_event_id: None,
+                },
                 &channel.id.to_string(),
                 "orphan reply",
                 &author_hex,

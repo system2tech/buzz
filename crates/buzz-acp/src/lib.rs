@@ -13,6 +13,7 @@ mod queue;
 mod relay;
 mod setup_mode;
 mod usage;
+mod workflow_wake;
 
 pub use usage::TurnUsage;
 
@@ -2017,6 +2018,12 @@ async fn tokio_main() -> Result<()> {
         tracing::warn!("failed to set startup watermark: {e}");
     }
 
+    let workflow_relay_pubkey = relay
+        .rest_client()
+        .relay_signing_pubkey()
+        .await
+        .map_err(|e| anyhow::anyhow!("relay signing identity error: {e}"))?;
+
     tracing::info!("connected to relay at {}", config.relay_url);
 
     relay
@@ -2108,6 +2115,7 @@ async fn tokio_main() -> Result<()> {
                 kinds: config.kinds_override.clone().unwrap_or_else(|| {
                     vec![
                         KIND_STREAM_MESSAGE,
+                        buzz_core::kind::KIND_WORKFLOW_MENTION_WAKE,
                         KIND_WORKFLOW_APPROVAL_REQUESTED,
                         KIND_STREAM_REMINDER,
                     ]
@@ -2632,6 +2640,49 @@ async fn tokio_main() -> Result<()> {
                         Some(buzz_event) => {
                             let kind_u32 = buzz_event.event.kind.as_u16() as u32;
 
+                            let (buzz_event, admission_author_override) = if kind_u32
+                                == buzz_core::kind::KIND_WORKFLOW_MENTION_WAKE
+                            {
+                                let Some(wake) = buzz_core::workflow_wake::WorkflowMentionWake::parse(
+                                    &buzz_event.event,
+                                )
+                                .ok()
+                                else {
+                                    continue;
+                                };
+                                let authority = match ctx
+                                    .rest_client
+                                    .workflow_wake_authority(wake.run_id(), &wake.message_event_id())
+                                    .await
+                                {
+                                    Ok(authority) => authority,
+                                    Err(error) => {
+                                        tracing::warn!(%error, "workflow wake authority unavailable");
+                                        continue;
+                                    }
+                                };
+                                let Some((message, signed_author)) = workflow_wake::verify(
+                                    &buzz_event.event,
+                                    authority,
+                                    workflow_relay_pubkey,
+                                    config.keys.public_key(),
+                                    buzz_event.channel_id,
+                                ) else {
+                                    tracing::warn!("workflow wake authority verification failed");
+                                    continue;
+                                };
+                                (
+                                    relay::BuzzEvent {
+                                        channel_id: buzz_event.channel_id,
+                                        event: message,
+                                    },
+                                    Some(signed_author),
+                                )
+                            } else {
+                                (buzz_event, None)
+                            };
+                            let kind_u32 = buzz_event.event.kind.as_u16() as u32;
+
                             if kind_u32 == KIND_MEMBER_ADDED_NOTIFICATION
                                 || kind_u32 == KIND_MEMBER_REMOVED_NOTIFICATION
                             {
@@ -2868,7 +2919,8 @@ async fn tokio_main() -> Result<()> {
                             // explicit pubkey list on top, for external people;
                             // it never revokes same-owner team bots.
                             {
-                                let author = buzz_event.event.pubkey.to_hex();
+                                let author = admission_author_override
+                                    .unwrap_or_else(|| buzz_event.event.pubkey.to_hex());
                                 // DM hardening: resolve channel type (fail-closed
                                 // to DM) so allowlist/anyone modes cannot be
                                 // exercised by non-owner authors inside DMs.
