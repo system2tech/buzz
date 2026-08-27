@@ -1419,6 +1419,17 @@ impl Db {
         event::get_event_by_id(&self.pool, community_id, id_bytes).await
     }
 
+    /// Fetch a live event by ID using the caller's transaction.
+    #[datastore_span(name = "get_event_by_id_in_transaction", system = "postgresql")]
+    pub async fn get_event_by_id_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        community_id: CommunityId,
+        id_bytes: &[u8],
+    ) -> Result<Option<StoredEvent>> {
+        event::get_event_by_id_in_transaction(tx, community_id, id_bytes).await
+    }
+
     /// Fetches a single event by its raw ID bytes, **including soft-deleted rows**.
     #[datastore_span(name = "get_event_by_id_including_deleted", system = "postgresql")]
     pub async fn get_event_by_id_including_deleted(
@@ -3543,6 +3554,39 @@ impl Db {
         name: &str,
     ) -> Result<Option<workflow::WorkflowRecord>> {
         workflow::find_by_owner_and_name(&self.pool, community_id, owner_pubkey, name).await
+    }
+
+    /// Fetch and share-lock one workflow on an existing transaction.
+    #[datastore_span(name = "get_workflow_for_share_in_transaction", system = "postgresql")]
+    pub async fn get_workflow_for_share_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        community_id: CommunityId,
+        id: Uuid,
+    ) -> Result<workflow::WorkflowRecord> {
+        workflow::get_workflow_for_share_in_transaction(tx, community_id, id).await
+    }
+
+    /// Create an exact-revision workflow run on an existing transaction.
+    #[datastore_span(name = "create_workflow_run_in_transaction", system = "postgresql")]
+    pub async fn create_workflow_run_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        community_id: CommunityId,
+        workflow_id: Uuid,
+        definition_event_id: &[u8],
+        trigger_event_id: Option<&[u8]>,
+        trigger_context: Option<&serde_json::Value>,
+    ) -> Result<Uuid> {
+        workflow::create_workflow_run_in_transaction(
+            tx,
+            community_id,
+            workflow_id,
+            definition_event_id,
+            trigger_event_id,
+            trigger_context,
+        )
+        .await
     }
 
     /// Create a new workflow run.
