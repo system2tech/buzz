@@ -697,6 +697,16 @@ jobs:
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
           TEST_DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Workflow revision rollout PostgreSQL tests
+        # Keep mixed-version invalidation and atomic rebinding in the permanent
+        # Postgres gate; these cases are ignored by infrastructure-free units.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'package(buzz-db) and test(/^workflow::/)' \
+            --run-ignored ignored-only
+        env:
+          BUZZ_TEST_DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
       - name: Database pressure observability PostgreSQL tests
         # Explicit pool acquisition and advisory-lock metrics require real
         # Postgres and are ignored by the infrastructure-free unit-test job.
