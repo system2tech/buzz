@@ -42,6 +42,7 @@ use crate::queue::{
     PromptProfile, PromptProfileLookup, ThreadTags,
 };
 use crate::relay::{ChannelInfo, RestClient};
+use crate::runtime_transport::BrokerActions;
 
 /// Window within which agent activity before a hard-cap death qualifies
 /// the turn as "recently active" (eligible for requeue instead of dead-letter).
@@ -751,6 +752,9 @@ pub struct PromptContext {
     /// Whether direct relay-only enrichments and housekeeping are available.
     /// False in broker mode, where the runtime has no relay route.
     pub relay_features_enabled: bool,
+    /// Broker-backed features that replace direct relay operations in keyless
+    /// mode. `None` for local mode.
+    pub broker_actions: Option<BrokerActions>,
     /// REST client for pre-prompt context fetches (thread/DM history).
     pub rest_client: RestClient,
     /// Shared channel metadata for startup-known and dynamically joined channels.
@@ -1970,7 +1974,10 @@ pub async fn run_prompt_task(
     }));
     let liveness = run_turn_liveness(
         agent.acp.observer_handle(),
+        ctx.broker_actions.clone(),
         agent.acp.observer_agent_index(),
+        observer_channel_id,
+        turn_id.clone(),
         observer::context_for_turn(
             observer_channel_id,
             None,
@@ -2047,19 +2054,38 @@ pub async fn run_prompt_task(
     //
     // Operator opt-out: `--no-memory` / `BUZZ_ACP_NO_MEMORY` skips the fetch.
     if ctx.memory_enabled {
-        if let (PromptSource::Channel(cid), Some(owner_pk)) =
-            (&source, ctx.agent_owner_pubkey.as_ref())
-        {
+        if let PromptSource::Channel(cid) = &source {
             let is_new_channel_session = !agent.state.sessions.contains_key(cid);
             if is_new_channel_session && !agent.state.core_sections.contains_key(cid) {
                 // Bounded — we'd rather start the session with no core hint
                 // than block session creation on a stalled relay.
                 const CORE_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
-                let fetch = crate::engram_fetch::build_core_section(
-                    &ctx.rest_client,
-                    &ctx.agent_keys,
-                    owner_pk,
-                );
+                let fetch = async {
+                    if let Some(broker) = ctx.broker_actions.as_ref() {
+                        match broker
+                            .storage_get(buzz_core::engram::CORE_SLUG.to_string())
+                            .await
+                        {
+                            Ok(record) => crate::engram_fetch::render_core_section(record.value),
+                            Err(error) => {
+                                tracing::warn!(
+                                    target: "engram::core",
+                                    "broker core fetch failed: {error} — emitting no section"
+                                );
+                                None
+                            }
+                        }
+                    } else if let Some(owner_pk) = ctx.agent_owner_pubkey.as_ref() {
+                        crate::engram_fetch::build_core_section(
+                            &ctx.rest_client,
+                            &ctx.agent_keys,
+                            owner_pk,
+                        )
+                        .await
+                    } else {
+                        None
+                    }
+                };
                 let section = match tokio::time::timeout(CORE_FETCH_TIMEOUT, fetch).await {
                     Ok(s) => s,
                     Err(_) => {
@@ -4430,20 +4456,25 @@ impl Drop for ReactionGuard {
 // by `run_prompt_task` after session resolution — so pings emitted for the
 // remainder of the turn carry the real session, matching every other
 // observer frame for this turn instead of a permanent `None`.
+#[allow(clippy::too_many_arguments)]
 async fn run_turn_liveness(
     observer: Option<observer::ObserverHandle>,
+    broker: Option<BrokerActions>,
     agent_index: Option<usize>,
+    channel_id: Option<Uuid>,
+    turn_id: String,
     mut context: observer::ObserverContext,
     interval: Duration,
     state: Arc<Mutex<LivenessState>>,
 ) {
-    let Some(observer) = observer else {
+    if observer.is_none() && broker.is_none() {
         return std::future::pending::<()>().await;
-    };
+    }
     if interval.is_zero() {
         return std::future::pending::<()>().await;
     }
     let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // The first tick completes immediately; skip it so the first liveness ping
     // fires one interval after the turn starts, not at t=0 (turn_started already
     // marks t=0).
@@ -4453,21 +4484,31 @@ async fn run_turn_liveness(
         // Nothing awaitable between the lock and the emit: `LivenessGuard::drop`
         // takes this same lock before its `abort()`, so the guard can only ever
         // observe this tick fully emitted or not yet started — never mid-emit.
-        let guard = match state.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if guard.closed {
-            return;
+        {
+            let guard = match state.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if guard.closed {
+                return;
+            }
+            context.session_id = guard.session_id.clone();
+            if broker.is_none() {
+                if let Some(observer) = observer.as_ref() {
+                    observer.emit(
+                        "turn_liveness",
+                        agent_index,
+                        &context,
+                        serde_json::json!({}),
+                    );
+                }
+            }
         }
-        context.session_id = guard.session_id.clone();
-        observer.emit(
-            "turn_liveness",
-            agent_index,
-            &context,
-            serde_json::json!({}),
-        );
-        drop(guard);
+        if let (Some(broker), Some(channel_id)) = (broker.as_ref(), channel_id) {
+            if let Err(error) = broker.liveness_ping(channel_id, turn_id.clone()).await {
+                tracing::debug!(%channel_id, "broker liveness ping dropped: {error}");
+            }
+        }
     }
 }
 
@@ -7432,7 +7473,10 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             let _liveness_guard = LivenessGuard::new(
                 tokio::spawn(run_turn_liveness(
                     Some(observer.clone()),
+                    None,
                     Some(0),
+                    None,
+                    "turn".into(),
                     context,
                     Duration::from_secs(10),
                     Arc::clone(&state),
@@ -7482,7 +7526,10 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         let guard = LivenessGuard::new(
             tokio::spawn(run_turn_liveness(
                 Some(observer.clone()),
+                None,
                 Some(0),
+                None,
+                "turn".into(),
                 context,
                 Duration::from_secs(10),
                 Arc::clone(&state),
@@ -7534,7 +7581,10 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         let guard = LivenessGuard::new(
             tokio::spawn(run_turn_liveness(
                 Some(observer.clone()),
+                None,
                 Some(0),
+                None,
+                "turn".into(),
                 context,
                 Duration::from_secs(10),
                 Arc::clone(&state),
@@ -7576,7 +7626,10 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         let context = observer::context_for(None, None, Some("t-1".into()));
         let liveness = run_turn_liveness(
             Some(observer.clone()),
+            None,
             Some(0),
+            None,
+            "turn".into(),
             context,
             Duration::ZERO,
             open_liveness_state(),
@@ -7600,6 +7653,9 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         let liveness = run_turn_liveness(
             None,
             None,
+            None,
+            None,
+            "turn".into(),
             context,
             Duration::from_secs(10),
             open_liveness_state(),
@@ -7638,7 +7694,10 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         }));
         let liveness = run_turn_liveness(
             Some(observer.clone()),
+            None,
             Some(0),
+            None,
+            "turn".into(),
             context,
             Duration::from_secs(10),
             state,
@@ -8262,6 +8321,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             base_prompt: None,
             cwd: ".".to_string(),
             relay_features_enabled: true,
+            broker_actions: None,
             rest_client: RestClient {
                 http: reqwest::Client::new(),
                 base_url: "http://127.0.0.1:0".to_string(),
