@@ -26,7 +26,7 @@ check() {
   [ -x "$HARNESS_ROOT/.venv/bin/s2harness" ] && ok "s2harness binary" \
       || warn "no .venv/bin/s2harness — build agent-harness first"
   "$HARNESS_ROOT/.venv/bin/s2harness" acp --help >/dev/null 2>&1 \
-      && ok "speaks acp" || warn "no 'acp' subcommand — wrong branch?"
+      && ok "speaks acp" || warn "no 'acp' subcommand — checkout predates ACP support"
   command -v docker >/dev/null && ok "docker installed" || warn "docker missing"
   docker info >/dev/null 2>&1 && ok "docker running" || warn "docker not running"
   [ -f "$APP_STATE/custom_harnesses/s2harness.json" ] && ok "s2harness registered" \
@@ -43,7 +43,7 @@ if [ ! -x "$HARNESS_ROOT/.venv/bin/s2harness" ]; then
   exit 1
 fi
 if ! "$HARNESS_ROOT/.venv/bin/s2harness" acp --help >/dev/null 2>&1; then
-  warn "s2harness has no 'acp' subcommand — you need the ACP-server branch."
+  warn "s2harness has no 'acp' subcommand — pull agent-harness and rebuild."
   exit 1
 fi
 docker info >/dev/null 2>&1 || { warn "Start Docker Desktop, then re-run."; exit 1; }
@@ -67,7 +67,7 @@ cat > "$APP_STATE/custom_harnesses/s2harness.json" <<JSON
   "command": "$HARNESS_ROOT/.venv/bin/s2harness",
   "args": ["acp", "--traces", "$HARNESS_ROOT/datasets/traces-acp"],
   "env": { "AHA_PROFILE": "$PROFILE" },
-  "installInstructionsUrl": "https://github.com/system2tech/agent-harness/tree/acp-server",
+  "installInstructionsUrl": "https://github.com/system2tech/agent-harness",
   "installHint": ""
 }
 JSON

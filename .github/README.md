@@ -14,9 +14,10 @@ repo's pinned toolchain — nothing installs globally.
 ```bash
 # 1. clone this fork and agent-harness as SIBLINGS
 git clone -b s2 https://github.com/system2tech/buzz.git
-git clone -b acp-server https://github.com/system2tech/agent-harness.git
+git clone https://github.com/system2tech/agent-harness.git
 
 # 2. build the agent (see agent-harness README), then:
+#    the setup script verifies `s2harness acp` exists and stops if it doesn't
 cd buzz
 scripts/s2-setup.sh --check     # what's present, changes nothing
 scripts/s2-setup.sh             # build Buzz, register our agent runtime
