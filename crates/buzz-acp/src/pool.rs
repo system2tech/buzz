@@ -653,10 +653,14 @@ impl ChannelInfoResolver {
         // one bounded attempt so relay degradation cannot add the full retry
         // window to every prompt. Unknown channels still use the retrying lazy
         // fetch below because callers must fail closed without metadata.
-        let refreshed = if cached.is_some() {
-            fetch_channel_info_once(channel_id, &self.rest_client).await
+        let refreshed = if let Some(rest_client) = self.rest_client.as_ref() {
+            if cached.is_some() {
+                fetch_channel_info_once(channel_id, rest_client).await
+            } else {
+                fetch_channel_info(channel_id, rest_client).await
+            }
         } else {
-            fetch_channel_info(channel_id, &self.rest_client).await
+            None
         };
         let mut info = match refreshed {
             Some(fresh) => {
@@ -8705,6 +8709,45 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         let mut event_tags = vec![json!(["d", id.to_string()])];
         event_tags.extend(tags.iter().map(|[k, v]| json!([k, v])));
         json!([{ "tags": event_tags }])
+    }
+
+    #[tokio::test]
+    async fn broker_resolver_uses_known_metadata_without_a_relay_fallback() {
+        let known_id = Uuid::new_v4();
+        let unknown_id = Uuid::new_v4();
+        let resolver = ChannelInfoResolver::without_fallback(
+            [
+                (
+                    known_id,
+                    crate::relay::ChannelInfo {
+                        name: "known".into(),
+                        channel_type: "stream".into(),
+                        description: None,
+                    },
+                ),
+                (
+                    unknown_id,
+                    crate::relay::ChannelInfo {
+                        name: "unknown".into(),
+                        channel_type: "unknown".into(),
+                        description: None,
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let known = resolver
+            .resolve(known_id)
+            .await
+            .expect("known broker metadata resolves")
+            .expect("known broker metadata remains cached");
+        assert_eq!(known.name, "known");
+        assert!(
+            resolver.resolve(unknown_id).await.unwrap().is_none(),
+            "unknown broker metadata must stay unresolved without a relay route"
+        );
     }
 
     #[tokio::test]
