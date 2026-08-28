@@ -638,6 +638,13 @@ usage.
 
 ---
 
+## CLI Binary (dev environment)
+
+- The `buzz` on PATH resolves to `desktop/src-tauri/target/debug/buzz`, which can be a stale **0-byte, non-executable** file. Use the working build instead:
+  `target/debug/buzz` (repo root). If the PATH one is broken, `chmod +x` it or call the root binary with its absolute path.
+
+---
+
 ## See Also
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) — setup, code style, PR process, how to add event kinds / CLI subcommands / HTTP endpoints
