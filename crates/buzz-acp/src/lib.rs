@@ -7020,6 +7020,7 @@ mod build_mcp_servers_tests {
         config.broker = Some(config::BrokerConfig {
             base_url: "http://127.0.0.1:8787".into(),
             credential: "broker-token".into(),
+            relay_url: "wss://relay.example".into(),
             poll_interval: std::time::Duration::from_secs(1),
         });
 

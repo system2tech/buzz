@@ -241,6 +241,39 @@ fn deep_merge(
     }
 }
 
+const OBSERVER_REDACTED_ENV_VALUE: &str = "<redacted>";
+
+/// Return the ACP wire payload that observer telemetry may retain.
+///
+/// The actual request sent to the child keeps its original MCP environment;
+/// only the observer copy is redacted. Environment names remain visible for
+/// diagnostics, but values are treated as potentially sensitive and never
+/// enter telemetry.
+fn redact_acp_write_for_observer(value: &serde_json::Value) -> serde_json::Value {
+    let mut redacted = value.clone();
+    let Some(servers) = redacted
+        .pointer_mut("/params/mcpServers")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return redacted;
+    };
+
+    for server in servers {
+        let Some(env) = server
+            .get_mut("env")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        for entry in env {
+            if let Some(value) = entry.get_mut("value") {
+                *value = serde_json::Value::String(OBSERVER_REDACTED_ENV_VALUE.into());
+            }
+        }
+    }
+    redacted
+}
+
 /// Build the merged `CODEX_CONFIG` environment-variable value for a Codex agent spawn.
 ///
 /// Returns `Some(json_string)` when `has_generated_codex_config` is true (Buzz injected a
@@ -516,6 +549,7 @@ impl AcpClient {
                 "BUZZ_AGENT_MODE"
                     | "BUZZ_BROKER_URL"
                     | "BUZZ_BROKER_CREDENTIAL"
+                    | "BUZZ_BROKER_RELAY_URL"
                     | "BUZZ_RELAY_URL"
                     | "BUZZ_PRIVATE_KEY"
                     | "BUZZ_AUTH_TAG"
@@ -816,7 +850,8 @@ impl AcpClient {
             "params": params,
         });
 
-        tracing::debug!(target: "acp::wire", "→ {}", &serde_json::to_string(&msg).unwrap_or_default());
+        let diagnostic_msg = redact_acp_write_for_observer(&msg);
+        tracing::debug!(target: "acp::wire", "→ {}", &serde_json::to_string(&diagnostic_msg).unwrap_or_default());
         if let Err(e) = self.write_ndjson(&msg).await {
             self.last_prompt_id = None;
             self.current_hard_deadline = None;
@@ -1091,7 +1126,7 @@ impl AcpClient {
         .await
         .map_err(|_| AcpError::WriteTimeout(WRITE_TIMEOUT))?
         .map_err(AcpError::Io)?;
-        self.observe("acp_write", value.clone());
+        self.observe("acp_write", redact_acp_write_for_observer(value));
         Ok(())
     }
 
@@ -2570,6 +2605,53 @@ mod tests {
     }
 
     #[test]
+    fn acp_write_observer_payload_redacts_mcp_credentials() {
+        let wire = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {
+                "mcpServers": [{
+                    "name": "buzz-mcp",
+                    "command": "buzz-mcp",
+                    "args": [],
+                    "env": [
+                        {"name": "BUZZ_AGENT_MODE", "value": "broker"},
+                        {"name": "BUZZ_BROKER_URL", "value": "https://broker.example"},
+                        {"name": "BUZZ_BROKER_CREDENTIAL", "value": "broker-secret"},
+                        {"name": "BUZZ_PRIVATE_KEY", "value": "nsec-secret"},
+                        {"name": "BUZZ_AUTH_TAG", "value": "auth-secret"},
+                        {"name": "OPENAI_API_KEY", "value": "provider-secret"}
+                    ]
+                }]
+            }
+        });
+
+        let observed = redact_acp_write_for_observer(&wire);
+        let serialized = serde_json::to_string(&observed).unwrap();
+        for secret in [
+            "broker-secret",
+            "nsec-secret",
+            "auth-secret",
+            "provider-secret",
+        ] {
+            assert!(!serialized.contains(secret), "observer leaked {secret}");
+        }
+        assert_eq!(
+            observed["params"]["mcpServers"][0]["env"][0]["value"],
+            OBSERVER_REDACTED_ENV_VALUE
+        );
+        assert_eq!(
+            observed["params"]["mcpServers"][0]["env"][2]["value"],
+            OBSERVER_REDACTED_ENV_VALUE
+        );
+        assert_eq!(
+            wire["params"]["mcpServers"][0]["env"][2]["value"],
+            "broker-secret"
+        );
+    }
+
+    #[test]
     fn session_prompt_request_format() {
         let prompt_text = "[Buzz @mention]\nChannel: test\nFrom: npub1...\nMessage: hello";
         let msg = serde_json::json!({
@@ -3164,6 +3246,19 @@ mod tests {
             "goose",
             "BUZZ_PRIVATE_KEY",
             &[("BUZZ_PRIVATE_KEY".into(), String::new())],
+        )
+        .await;
+
+        assert_eq!(observed, "unset");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn empty_broker_relay_tombstone_removes_inherited_identity_from_child() {
+        let observed = spawn_named_and_probe_child_env_presence(
+            "goose",
+            "BUZZ_BROKER_RELAY_URL",
+            &[("BUZZ_BROKER_RELAY_URL".into(), String::new())],
         )
         .await;
 
