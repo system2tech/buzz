@@ -1,69 +1,189 @@
 # Buzz — System 2 fork
 
-A workspace where humans and agents share channels. This fork adds **nothing to the
-code** — just this page, [`S2.md`](../S2.md), and
-[`scripts/s2-setup.sh`](../scripts/s2-setup.sh), so tracking upstream stays a
-trivial merge.
+A workspace where humans and agents share channels. This fork keeps its code
+changes small and documented — see [`S2-CHANGES.md`](../S2-CHANGES.md) for
+exactly what differs from upstream and why, so tracking
+[block/buzz](https://github.com/block/buzz) stays cheap.
 
-Upstream: [block/buzz](https://github.com/block/buzz) · our branch: `s2`
+Our branch: `s2`.
 
-This page sets up Buzz **on your own machine**, with its own relay and your own
-agent. Nothing here touches anyone else's setup.
+There are **two ways to run this**, and they differ only in which relay you talk
+to. The agent setup is identical for both, so do Part 1 either way, then pick a
+path in Part 2.
+
+- **Path A — your own relay, on your machine.** Nothing shared. Best for trying
+  the thing out and breaking it freely.
+- **Path B — the team relay.** Shared channels, shared agents, always on. Your
+  agent still runs on your laptop.
 
 ## Before you start
 
-- **Docker Desktop**, running. Buzz's relay, database and object store are containers.
+- **Docker Desktop**, running. Path A's relay, database and object store are
+  containers. Path B needs Docker too, for the build.
 - **Access to `system2tech/agent-harness`** — it is private.
-- **A model API key.** `DEEPINFRA_API_KEY` is the one that works from anywhere;
-  the LUMI profiles need a live allocation and an SSH tunnel, so start with DeepInfra.
+- **A model API key.** `DEEPINFRA_API_KEY` works from anywhere. The `lumi-*`
+  profiles need a live LUMI allocation and an SSH tunnel, so start with
+  DeepInfra.
 
-Rust, Node, pnpm and `just` all come from the repo's pinned toolchain. Nothing
-installs globally.
+Rust, Node, pnpm, `just` and Flutter all come from the repo's pinned toolchain
+via Hermit. Nothing installs globally.
 
-## Setup
+---
+
+## Part 1 — the agent (both paths)
 
 ```bash
-# 1. Clone both repos as SIBLINGS, in the same parent directory.
-#    agent-harness needs -b acp-server until system2tech/agent-harness#246 merges:
-#    the `acp` subcommand Buzz drives lives only on that branch.
+# Clone both repos as SIBLINGS, in the same parent directory.
+# agent-harness needs -b acp-server until system2tech/agent-harness#246 merges:
+# the `acp` subcommand Buzz drives lives only on that branch.
 git clone -b s2 https://github.com/system2tech/buzz.git
 git clone -b acp-server git@github.com:system2tech/agent-harness.git
 
-# 2. Build the agent. The pip upgrade is REQUIRED — see agent-harness docs/setup.md.
+# Build the agent. The pip upgrade is REQUIRED — see agent-harness docs/setup.md.
 cd agent-harness
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install -e .
-.venv/bin/s2harness profiles          # `key=set` on at least one profile
 
-# 3. Make a model reachable. Without this every profile reports key=MISSING.
-export DEEPINFRA_API_KEY=...          # or add it to your shell profile
+# Make a model reachable, then check it.
+export DEEPINFRA_API_KEY=...          # add to your shell profile to persist
+.venv/bin/s2harness profiles          # want `key=set` on at least one line
+```
 
-# 4. Wire Buzz to the agent, then run it.
+Then wire it into Buzz. The script builds Buzz and registers the `s2harness`
+runtime so it appears in the app's harness dropdown:
+
+```bash
 cd ../buzz
 scripts/s2-setup.sh --check           # reports what is present, changes nothing
-scripts/s2-setup.sh                   # builds Buzz, registers the s2harness runtime
+scripts/s2-setup.sh                   # builds Buzz, registers the runtime
+```
+
+`--check` is worth reading before the real run. It tells you whether the harness
+binary exists, whether it speaks `acp`, whether Docker is up, and whether the
+runtime is already registered.
+
+> **If you would rather register the harness by hand**, or the script's location
+> is wrong for your setup, see [Registering the harness
+> manually](#registering-the-harness-manually) below.
+
+---
+
+## Part 2A — your own relay
+
+```bash
 . ./bin/activate-hermit && just dev
 ```
 
-`just dev` starts a local relay on port 3000 and opens the desktop app against it.
-It fails fast if port 3000 is already in use — usually a relay left running by an
-earlier session.
+`just dev` starts a relay on port 3000 and opens the desktop app against it. It
+refuses to launch if port 3000 is already in use, which usually means a relay
+left running by an earlier session.
 
-Then, in the app: **create an identity → create a channel → add an agent** on the
-`s2harness` runtime. Set **Parallelism to 1** — the default of 10 spawns ten
+In the app: **create an identity → create a channel → add an agent** on the
+`s2harness` runtime.
+
+## Part 2B — the team relay
+
+```bash
+. ./bin/activate-hermit && just desktop-standalone
+```
+
+**`desktop-standalone`, not `dev`.** `dev` starts its own local relay and would
+ignore the team one entirely.
+
+You need two things from whoever runs the relay:
+
+1. **An invite link**, of the form `https://<relay>/invite/<code>`. It carries
+   the relay address, so it is the only thing you need to paste. Treat it like a
+   password — anyone holding it can join.
+2. Nothing else. Your model key and harness are already set up from Part 1.
+
+In the app: **create an identity**, then at *Join or create a community* choose
+**"I already have a community" → "I'm a member or admin"** and paste the invite
+link.
+
+> Not "I own the community" — despite being the truthful-sounding option, it
+> routes to Block's hosted signup, which is a different product. And not "Join a
+> community", which wants an invite *code* rather than a link.
+
+Then **add an agent** on the `s2harness` runtime, exactly as in Path A.
+
+---
+
+## Registering the harness manually
+
+`scripts/s2-setup.sh` writes this for you. Do it by hand if you moved things, or
+if you want a second runtime alongside it.
+
+In the app: **Settings → Harnesses → Add custom harness**, then:
+
+| field | value |
+|---|---|
+| id | `s2harness` |
+| label | `s2harness` |
+| command | `<absolute path to>/agent-harness/.venv/bin/s2harness` |
+| args | `acp` |
+| env | `AHA_PROFILE=deepinfra-smoke` |
+
+`command` must be the absolute path to the binary inside the virtualenv — not
+`s2harness` on your `PATH`, which will not exist. `AHA_PROFILE` picks the model;
+any name from `s2harness profiles` works.
+
+If the harness shows as **`(not installed)` and greyed out**, the app has a
+cached answer rather than a missing binary: hit **refresh** on that settings
+panel, which runs a live probe. It takes 20–60 seconds because it probes every
+known runtime, not just yours.
+
+The registration is stored per app instance, under
+`~/Library/Application Support/xyz.block.buzz.app.dev.<branch>/custom_harnesses/`.
+The instance is derived from your **checked-out branch**, so a harness registered
+on one branch is invisible on another. That is a real trap; `s2-setup.sh` derives
+the same slug the app does.
+
+---
+
+## Mobile
+
+The mobile client is built from source, not installed from a store.
+
+```bash
+. ./bin/activate-hermit
+just mobile-install                   # resolve packages with the pinned Flutter SDK
+just mobile-dev                       # builds and starts the Simulator
+```
+
+Then pair it to your desktop identity: **desktop → Settings → Mobile**, and scan
+the QR code with the phone. Pairing carries your existing identity across, so the
+phone is *you* — same agents, same permissions — rather than a second person in
+the workspace.
+
+**Pairing needs a pairing relay, and this is the part that surprises people.** A
+closed relay cannot pair a device against itself: the handshake uses temporary
+throwaway keys, which by definition are not members, so the relay rejects them.
+The failure looks like `404 Not Found` or `relay closed waiting for EOSE`.
+
+- **Path B (team relay):** already configured. Nothing to do.
+- **Path A (your own relay):** add this line to `.env` in the repo root and
+  restart `just dev`:
+
+  ```
+  BUZZ_PAIRING_RELAY_URL=wss://pairing.buzz.xyz
+  ```
+
+  That is Block's dedicated pairing relay, which is what upstream's own hosted
+  deployment uses. It only ever sees a few seconds of end-to-end-encrypted
+  handshake between two random keys, so nothing of your workspace goes there.
+
+---
+
+## Four things that will otherwise cost you an afternoon
+
+**Set Parallelism to 1** when adding an agent. The default of 10 spawns ten
 subprocesses per agent.
 
-`AHA_PROFILE` in the registered runtime picks the model. `scripts/s2-setup.sh`
-writes `deepinfra-smoke`; change it to a `lumi-*` profile only if you have a LUMI
-allocation and a tunnel on port 8010. `S2_HARNESS_ROOT` overrides where
-`agent-harness` is expected.
-
-## Three things that will otherwise cost you an afternoon
-
-**Add an agent to a channel *before* starting it.** Channel discovery runs once, at
-startup. Adding it afterwards does nothing until the harness restarts — despite a
-log line claiming it subscribed to membership changes.
+**Add an agent to a channel *before* starting it.** Channel discovery runs once,
+at startup. Adding it afterwards does nothing until the harness restarts —
+despite a log line claiming it subscribed to membership changes.
 
 **`discovered 0 channel(s)` means wrong tenant, not a stuck model.** Buzz keys
 tenants on the literal `Host` string and seeds a separate community for *each*
@@ -75,5 +195,7 @@ that discovered no channels reports itself online and sits idle forever.
 
 ## More
 
-[`S2.md`](../S2.md) covers the tenancy model, reaching Buzz from a phone, why the
-relay's scheme is global, and a diagnosis order for a silent agent.
+[`S2.md`](../S2.md) covers the tenancy model, why the relay's scheme is global,
+and a diagnosis order for a silent agent.
+[`S2-CHANGES.md`](../S2-CHANGES.md) lists every change this fork makes to
+upstream, and what to re-check when merging a newer Buzz.
