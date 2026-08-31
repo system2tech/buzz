@@ -13,8 +13,17 @@ BUZZ_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # agent-harness is a sibling checkout. It knows nothing about Buzz — it is a
 # generic ACP server, and Buzz is one of several clients that can spawn it.
 HARNESS_ROOT="${S2_HARNESS_ROOT:-$(dirname "$BUZZ_ROOT")/agent-harness}"
-APP_STATE="$HOME/Library/Application Support/xyz.block.buzz.app.dev.main"
-PROFILE="${AHA_PROFILE:-lumi-qwen38-27b}"
+# The desktop's app-data directory is per-instance, and the instance slug comes
+# from the CHECKOUT'S BRANCH (scripts/instance-env.sh) — not a fixed "main". A
+# harness registered into the wrong directory is invisible to the running app,
+# which shows up as an empty runtime dropdown and no error anywhere.
+SLUG="$(git -C "$BUZZ_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null \
+        | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//')"
+APP_STATE="$HOME/Library/Application Support/xyz.block.buzz.app.dev.${SLUG:-main}"
+# deepinfra-smoke by default: it works from any machine with a key. The lumi-*
+# profiles need a live LUMI allocation and an SSH tunnel on 8010, so they are a
+# deliberate choice, not a default a new setup should silently inherit.
+PROFILE="${AHA_PROFILE:-deepinfra-smoke}"
 
 say()  { printf '  %s\n' "$*"; }
 ok()   { printf '  \033[0;32m✓\033[0m %s\n' "$*"; }
@@ -26,7 +35,7 @@ check() {
   [ -x "$HARNESS_ROOT/.venv/bin/s2harness" ] && ok "s2harness binary" \
       || warn "no .venv/bin/s2harness — build agent-harness first"
   "$HARNESS_ROOT/.venv/bin/s2harness" acp --help >/dev/null 2>&1 \
-      && ok "speaks acp" || warn "no 'acp' subcommand — checkout predates ACP support"
+      && ok "speaks acp" || warn "no 'acp' subcommand — needs the acp-server branch (see below)"
   command -v docker >/dev/null && ok "docker installed" || warn "docker missing"
   docker info >/dev/null 2>&1 && ok "docker running" || warn "docker not running"
   [ -f "$APP_STATE/custom_harnesses/s2harness.json" ] && ok "s2harness registered" \
@@ -43,7 +52,11 @@ if [ ! -x "$HARNESS_ROOT/.venv/bin/s2harness" ]; then
   exit 1
 fi
 if ! "$HARNESS_ROOT/.venv/bin/s2harness" acp --help >/dev/null 2>&1; then
-  warn "s2harness has no 'acp' subcommand — pull agent-harness and rebuild."
+  # Pulling does NOT fix this: `acp` lives only on the acp-server branch until
+  # system2tech/agent-harness#246 merges. Saying "pull" sends people in circles.
+  warn "s2harness has no 'acp' subcommand."
+  say  "It lives on the acp-server branch until agent-harness#246 merges:"
+  say  "  git -C $HARNESS_ROOT checkout acp-server && $HARNESS_ROOT/.venv/bin/pip install -e $HARNESS_ROOT"
   exit 1
 fi
 docker info >/dev/null 2>&1 || { warn "Start Docker Desktop, then re-run."; exit 1; }
