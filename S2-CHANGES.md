@@ -4,7 +4,10 @@ Everything this fork changes against upstream, why, and what to re-check when
 merging a newer Buzz. Kept current in the same commit as any change to the code
 it describes — a list that drifts is worse than no list, because it is trusted.
 
-**Fork base:** `c856be0fb954` (`upstream/main`, 2026-08-27).
+**Merged up to:** `58cc4b7e9be7` (`origin/main`), 2026-08-31. Previous base was
+`c856be0fb954`; that merge brought 24 commits including one reworking
+`crates/buzz-acp/src/pool.rs` (#6946) and applied cleanly with no conflicts —
+835 crate tests pass on the merged tree.
 **Relay image pinned to the same commit:** `ghcr.io/block/buzz:sha-c856be0`
 (`deploy/compose/.env` on the host). Desktop and relay are built from one commit
 on purpose — a mismatch there cost us an afternoon when upstream's onboarding
