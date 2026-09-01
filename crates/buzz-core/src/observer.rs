@@ -22,7 +22,23 @@ pub const NIP44_MIN_CONTENT_LEN: usize = 132;
 /// Maximum NIP-44 v2 ciphertext length.
 pub const NIP44_MAX_CONTENT_LEN: usize = 87_472;
 /// Maximum observer plaintext JSON size accepted by helpers.
-pub const OBSERVER_MAX_PLAINTEXT_LEN: usize = 65_535;
+///
+/// **Must stay below what NIP-44 will actually encrypt** (S2). rust-nostr caps a
+/// v2 plaintext at `65_536 - 128 = 65_408`
+/// (`nostr::nips::nip44::v2::MAX_SUPPORTED_PLAINTEXT_SIZE`), so a limit of 65_535
+/// opened a 127-byte dead zone: `fit_observer_event_to_budget` trimmed an
+/// oversized frame down to exactly this value, `nip44::encrypt` then refused it,
+/// and `publish_relay_observer_event` dropped the frame with only a warning. The
+/// frames that hit it are the biggest ones -- a whole turn's coalesced assistant
+/// text -- so the failure took out precisely the content a human most wanted to
+/// see. Observed 17 times in one day on a busy agent
+/// (`failed to encrypt relay observer event: NIP-44 error: message too long`).
+///
+/// 64_000 rather than 65_408: the trim is computed on the payload, while the
+/// limit applies to the serialized frame around it, so a value flush against the
+/// ceiling re-enters the dead zone as soon as the envelope grows. The margin is
+/// cheap -- elision already handles anything over it.
+pub const OBSERVER_MAX_PLAINTEXT_LEN: usize = 64_000;
 
 /// Errors returned by observer payload encryption/decryption helpers.
 #[derive(Debug, Error)]

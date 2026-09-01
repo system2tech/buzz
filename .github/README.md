@@ -176,7 +176,7 @@ The failure looks like `404 Not Found` or `relay closed waiting for EOSE`.
 
 ---
 
-## Four things that will otherwise cost you an afternoon
+## Five things that will otherwise cost you an afternoon
 
 **Set Parallelism to 1** when adding an agent. The default of 10 spawns ten
 subprocesses per agent.
@@ -192,6 +192,19 @@ spelling of localhost (`localhost:3000`, `localhost`, `127.0.0.1`,
 
 **A green dot means the process is alive, not that the agent can work.** An agent
 that discovered no channels reports itself online and sits idle forever.
+
+**Relay media is auth-gated, so an agent cannot `curl` an image you send it.**
+Attachments arrive as `![image](https://<relay>/media/<sha256>.png)`, and an
+unauthenticated fetch returns **HTTP 401** — verified 2026-09-01. Blossom wants a
+signed get-auth. The CLI signs it for you:
+
+```bash
+buzz media get <url-or-sha256.ext> -o /tmp/img.png
+```
+
+Worth telling your agents, because the failure is opaque: they see an auth error on
+a URL you can open in your own browser, and the natural conclusion is that the
+image is broken rather than that they need a different fetch.
 
 ## More
 
