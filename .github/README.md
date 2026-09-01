@@ -144,37 +144,34 @@ the same slug the app does.
 
 ## Mobile
 
-The mobile client is built from source, not installed from a store.
-
-```bash
-. ./bin/activate-hermit
-just mobile-install                   # resolve packages with the pinned Flutter SDK
-just mobile-dev                       # builds and starts the Simulator
-```
+**Install Buzz from the App Store.** There is no build step — the published client
+is the one to use.
 
 Then pair it to your desktop identity: **desktop → Settings → Mobile**, and scan
 the QR code with the phone. Pairing carries your existing identity across, so the
-phone is *you* — same agents, same permissions — rather than a second person in
-the workspace.
+phone is *you* — same agents, same permissions — rather than a second person in the
+workspace.
 
-**Pairing needs a pairing relay, and this is the part that surprises people.** A
-closed relay cannot pair a device against itself: the handshake uses temporary
-throwaway keys, which by definition are not members, so the relay rejects them.
-The failure looks like `404 Not Found` or `relay closed waiting for EOSE`.
+**This works on Path B and not on Path A**, and the reason is iOS rather than
+anything in Buzz. App Transport Security forces an App Store app onto `wss`, and a
+relay serves `ws` clients **or** `wss` clients, never both
+([`S2.md`](../S2.md) § *Why the relay scheme is global, and what it costs*). So:
 
-- **Path B (team relay):** already configured. Nothing to do.
-- **Path A (your own relay):** add this line to `.env` in the repo root and
-  restart `just dev`:
+- **Path B (team relay):** works as-is. `wss://buzz.system2ai.com` has a real
+  certificate, which is most of why a hosted relay on a real domain is the cleaner
+  end state.
+- **Path A (your own relay):** the phone cannot reach `ws://localhost:3000` at all.
+  Getting there means putting the local relay behind `wss` — Tailscale plus a
+  certificate — at which point *every* client has to be `wss` too, including your
+  desktop. `S2.md` covers that trade; it is not worth doing just to try the phone.
 
-  ```
-  BUZZ_PAIRING_RELAY_URL=wss://pairing.buzz.xyz
-  ```
-
-  That is Block's dedicated pairing relay, which is what upstream's own hosted
-  deployment uses. It only ever sees a few seconds of end-to-end-encrypted
-  handshake between two random keys, so nothing of your workspace goes there.
-
----
+> **Building the mobile client from source** (`just mobile-install`,
+> `just mobile-dev`) is for working *on* the mobile app, not for using it. It is
+> also the only way to pair against a local relay, and needs
+> `BUZZ_PAIRING_RELAY_URL=wss://pairing.buzz.xyz` in `.env` — a closed relay cannot
+> pair a device against itself, because the handshake uses temporary throwaway keys
+> that are not members, so the relay rejects them (`404 Not Found`, or
+> `relay closed waiting for EOSE`).
 
 ## Five things that will otherwise cost you an afternoon
 
