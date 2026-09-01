@@ -22,6 +22,8 @@ changed under a running setup.
 | session resume | `crates/buzz-acp/src/{acp,pool}.rs` | **behaviour change** |
 | s2harness system prompt | `crates/buzz-acp/src/pool.rs` | **behaviour change** |
 | transcript timestamps | `desktop/src/features/agents/ui/agentSessionTranscript.ts` | **bug fix, upstream's bug** |
+| concurrent-session grouping | `desktop/src/features/agents/ui/agentSessionTranscriptGrouping.ts` | **bug fix, upstream's bug** |
+| observer frame size ceiling | `crates/buzz-core/src/observer.rs` | **bug fix, upstream's bug** |
 
 The last three carry merge risk. The rest are additive files upstream does not
 have. The transcript fix is the one to offer upstream first — it is their bug, it
@@ -42,6 +44,8 @@ don't.
 | `SessionState.resumable` + `forget_channel` + the `session/load` attempt | Does upstream call `session/load` (or v2's `session/resume`) itself? | Drop ours entirely. |
 | — | Does Buzz still send `protocolVersion: 2` in its own `initialize` request? | It is a draft it does not implement, and it uses the answer as a feature flag. **Worth reporting to Block** rather than patching here. |
 | — | Does Buzz still put a bare `systemPrompt` at the root of `session/new`? | The spec forbids custom root fields, and the `acp` Python library therefore drops it. `_meta` is the working carrier. **Worth reporting to Block.** |
+| Runs keyed by session in `splitIntoSessionRuns` | Does upstream tolerate CONCURRENT sessions on one channel, or does it still cut a run whenever the session id changes? | Take theirs and drop ours. Keep the two S2 tests in `agentSessionTranscriptGrouping.test.mjs`; one of them inverts an upstream test, so expect a conflict there and re-read the reasoning below before resolving. |
+| `OBSERVER_MAX_PLAINTEXT_LEN = 64_000` | Is it still 65_535? NIP-44 v2 accepts at most 65_408 (`nostr::nips::nip44::v2::MAX_SUPPORTED_PLAINTEXT_SIZE`), so 65_535 aims the trim into a dead zone. | If upstream has lowered it below 65_408, take theirs. If not, this is worth reporting to Block — it silently drops the largest observer frames. |
 | `timestamp` carried on row updates in `agentSessionTranscript.ts` | Has upstream fixed the frozen-transcript bug — do `upsertMessage`, `upsertTextItem` and `replaceLifecycleItem` pass `timestamp` into their `replaceItem` payloads? | Take theirs and drop ours. If they reshaped those helpers, re-apply the one-line-each change and keep the two S2 tests in `agentSessionTranscript.test.mjs`. |
 
 Two more findings for upstream, neither of which we patch:
@@ -173,6 +177,70 @@ nothing needs it yet — see the watch list above for when to replace both names
 both are small and both are ours by one branch only. A test
 (`s2harness_gets_the_system_prompt_via_meta_on_protocol_v1`) pins the behaviour
 and will fail loudly if upstream reshapes either.
+
+---
+
+## Flickering, vanishing rows on a parallel agent (`desktop/` + `crates/buzz-core/`)
+
+### The problem
+
+Rows appeared, flickered and vanished behind a large blank region, and the view
+lagged reality by minutes. Reported 2026-09-01, distinct from the frozen-clock bug
+below and surfacing only once that was fixed. **Two independent causes, both
+upstream's, both triggered by parallelism > 1** — which is Buzz's default of 10.
+
+**1. The grouper assumed one session at a time.** A Buzz agent keeps one ACP
+session **per pool slot** on the same channel (`SessionState.sessions` lives on
+`OwnedAgent`), and every slot stamps its own session id onto its observer frames.
+`splitIntoSessionRuns` started a new run whenever that id changed, so interleaved
+sessions cut a run at almost every item. Measured on a full 3000-event window:
+2000 items → **1999 display blocks, 999 of them near-empty "Earlier observed
+session" dividers**, plus ~990 duplicate `turn:` React keys. **The cliff is at TWO
+concurrent sessions, not ten.**
+
+**2. The harness silently dropped its largest frames.**
+`OBSERVER_MAX_PLAINTEXT_LEN` was 65_535 while rust-nostr caps a NIP-44 v2
+plaintext at 65_408, so `fit_observer_event_to_budget` trimmed oversized frames
+*into* a 127-byte dead zone where `nip44::encrypt` refuses them and the publisher
+drops them with only a warning. The frames that hit it are the biggest — a whole
+turn's coalesced assistant text — so it removed exactly the content a human
+wanted. Observed **17 times in one day**, including the two minutes reported.
+
+### The change
+
+Runs are keyed by session, so a session already seen resumes its own run; a
+genuinely new id still opens a new run, leaving restart/`session/new` handling
+untouched. The size ceiling drops to 64_000 — below the real limit with margin,
+because the trim measures the payload while the limit applies to the serialized
+frame.
+
+**One upstream test is inverted by this**, and that is worth understanding before
+resolving a merge conflict on it. It asserted that a re-occurring session opens a
+*second* run, and guarded against the duplicate React keys that produced — a guard
+around the symptom rather than the cause. It now asserts one run per session,
+which makes the collision impossible rather than survivable.
+
+### A change that was reverted, kept because the reasoning is the useful part
+
+An earlier attempt (`097ed32ed`, reverted) capped the transcript to the last 12
+turns. It did not fix the flicker and **made it worse**: with 10 slots a global
+12-turn budget keeps 1.2 turns per slot, and when the slots roll to new turns
+together nearly everything else is evicted. Measured — cap off: **0 of 44 ticks
+unmounted a row**; cap on: **9 of 44, up to 72 rows at once**. It also never
+reached the dominant cost, because `AgentSessionThreadPanel.tsx:182` builds the
+transcript on the **uncapped** window for its scroll anchoring.
+
+If a cap is ever wanted, budget it per session, not globally.
+
+### Known, not fixed
+
+- `buildTranscriptState` is superlinear: 122 ms on a full window, rising from
+  3.6 µs/event at 67 items to 66.4 µs/event at 1734. `ensureMutable` copies the
+  whole `items` array and `itemsById` Map per event, and `replaceItem` does an
+  O(n) `findIndex`.
+- Continuation ids encode window position (`:c${continuationSeq}`), so an eviction
+  renumbers ~30 of the newest 60 and invalidates the scroll anchor. Deriving them
+  from `event.seq` would fix it.
 
 ---
 
