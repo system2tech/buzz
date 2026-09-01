@@ -2689,6 +2689,59 @@ mod tests {
         assert!(prompt.starts_with("<context>"));
     }
 
+    /// A v1 agent DOES receive the channel's agent instructions -- in the user
+    /// message, because it cannot be given them any other way.
+    ///
+    /// The sibling test above proves only that the sections are absent when no
+    /// system prompt is configured. This one is the case that matters: an agent
+    /// answering `protocolVersion: 1` sets `has_system_prompt_support: false`,
+    /// and Buzz must then fall back rather than silently drop the instructions.
+    ///
+    /// Added by S2 while diagnosing why `s2harness` agents ignored their
+    /// instructions: our harness answered `protocolVersion: 2`, which switched
+    /// this fallback OFF and replaced it with a `session/new` field the harness
+    /// did not read. Instructions reached the model through neither path. This
+    /// test pins the half of the mechanism that still has to work.
+    #[test]
+    fn test_format_prompt_legacy_agent_gets_instructions_in_user_message() {
+        let ch = Uuid::new_v4();
+        let event = make_event("what is your name?");
+
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                has_system_prompt_support: false,
+                standing_context_sent: false,
+                base_prompt: Some("You are an agent in Buzz."),
+                system_prompt: Some("You are Fuzzy, a cheerful assistant."),
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+
+        eprintln!("=== what a v1 agent actually receives ===\n{prompt}\n=== end ===");
+
+        assert!(
+            prompt.contains("You are Fuzzy, a cheerful assistant."),
+            "the agent instructions must reach a v1 agent somehow"
+        );
+        assert!(
+            prompt.contains("You are an agent in Buzz."),
+            "the base prompt must reach a v1 agent too"
+        );
+    }
+
     #[test]
     fn test_format_prompt_with_agent_core() {
         let ch = Uuid::new_v4();

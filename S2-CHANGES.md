@@ -20,9 +20,38 @@ changed under a running setup.
 | onboarding docs | `.github/README.md`, `S2.md` | docs only |
 | local setup | `scripts/s2-setup.sh` | ours, no upstream equivalent |
 | session resume | `crates/buzz-acp/src/{acp,pool}.rs` | **behaviour change** |
+| s2harness system prompt | `crates/buzz-acp/src/pool.rs` | **behaviour change** |
 
-Only the last carries merge risk. The rest are additive files upstream does not
+Only the last two carry merge risk. The rest are additive files upstream does not
 have.
+
+---
+
+## Upstream watch list
+
+**Run this at every upstream merge.** Each entry is something we built because
+upstream did not have it, plus the thing to look for that would let us delete ours
+and take theirs. **Prefer upstream's answer every time** — they maintain it, we
+don't.
+
+| ours | check for upstream | if present |
+|---|---|---|
+| `S2HARNESS_NAME` on the system-prompt branch (`pool.rs`) | Has [ACP RFD #1237](https://github.com/agentclientprotocol/agent-client-protocol/pull/1237) (*Client-Provided System Prompt*) landed, and has Buzz moved from the protocol-version gate to the capability it defines? | Delete `S2HARNESS_NAME` **and** `CLAUDE_AGENT_ACP_NAME` from that branch; advertise the capability from `s2harness` instead. Both names exist only because there is no standard. |
+| `SessionState.resumable` + `forget_channel` + the `session/load` attempt | Does upstream call `session/load` (or v2's `session/resume`) itself? | Drop ours entirely. |
+| — | Does Buzz still send `protocolVersion: 2` in its own `initialize` request? | It is a draft it does not implement, and it uses the answer as a feature flag. **Worth reporting to Block** rather than patching here. |
+| — | Does Buzz still put a bare `systemPrompt` at the root of `session/new`? | The spec forbids custom root fields, and the `acp` Python library therefore drops it. `_meta` is the working carrier. **Worth reporting to Block.** |
+
+Two more findings for upstream, neither of which we patch:
+
+- **Agent-activity rendering stalls and does not recover** when the desktop's
+  relay WebSocket drops. Affects `claude-agent-acp` agents too, so it is not
+  harness-specific. Measured 2026-09-01 on the hosted relay: 23 WebSocket
+  connections established and 21 closed in six hours, and **zero events of kind
+  24200 reached the relay in that window** while transcripts had rendered
+  earlier — so the local delivery path, not the relay one, is where to look.
+- **Parallelism defaults to 10**, so one agent spawns ten harness subprocesses,
+  each publishing observer frames. Documented in `.github/README.md` as a trap;
+  arguably the default is the bug.
 
 ---
 
@@ -90,6 +119,46 @@ failed turn.
 For buzz-acp's own restart the map is also written to disk, keyed by agent name
 under the session `cwd`, because a workspace can be shared and two agents must
 not read each other's sessions.
+
+## Agent instructions for s2harness (`crates/buzz-acp/src/pool.rs`)
+
+### The problem
+
+Buzz decides how to deliver a channel's agent instructions from the agent's
+reported protocol version: at `>= 2` it sends a `systemPrompt` field on
+`session/new` **and suppresses** the fallback that otherwise carries the
+instructions inside the first user message.
+
+`s2harness` answers `protocolVersion: 1`, truthfully — v1 is what the `acp`
+library implements, and v2 is a draft in which `session/load` (which s2harness
+does implement) no longer exists. Before this change it answered 2, so Buzz turned
+off the fallback and sent a field the harness did not read: **the instructions
+reached the model through neither path.** Measured 2026-09-01 — the agent ran on a
+stock prompt and could not name itself.
+
+### The change
+
+`s2harness` joins `claude-agent-acp` on the `_meta.systemPrompt.append` branch, by
+name, regardless of version. `_meta` rather than the bare field because that is
+the only carrier that can work: the spec forbids custom fields at the root of a
+specified type, so `acp`'s `NewSessionRequest` has no `systemPrompt` and pydantic
+drops it during parsing (measured — a request carrying both arrives with only the
+`_meta` half).
+
+**By name, and we know that is not the design we want.** Buzz's version gate
+implements an early revision of ACP RFD #1237, which has since moved to a
+capability advertised at `initialize`. A capability handshake would let any custom
+harness opt in with no change to Buzz; a name list cannot. It is not built because
+nothing needs it yet — see the watch list above for when to replace both names.
+
+### On upstream merge
+
+`has_system_prompt_support` and `session_new_system_prompt` are the two functions;
+both are small and both are ours by one branch only. A test
+(`s2harness_gets_the_system_prompt_via_meta_on_protocol_v1`) pins the behaviour
+and will fail loudly if upstream reshapes either.
+
+---
 
 ### What upstream files are touched, and how to re-merge
 

@@ -300,6 +300,26 @@ pub struct OwnedAgent {
 /// rename, so the new name is a reliable capability gate.
 const CLAUDE_AGENT_ACP_NAME: &str = "@agentclientprotocol/claude-agent-acp";
 
+/// Name reported by S2's own harness (`s2harness acp`). It reads
+/// `_meta.systemPrompt.append` exactly as `claude-agent-acp` does, so it belongs
+/// on the same branch.
+///
+/// **Named, not version-gated, and that is deliberate (S2).** The version gate
+/// below implements an early revision of ACP RFD #1237, which proposed the
+/// protocol version as the capability signal; the RFD has since moved to a
+/// capability advertised at `initialize`, and nothing here follows it yet. In the
+/// meantime a version number is doing a feature flag's job, and it does the job
+/// badly: `s2harness` answers `protocolVersion: 1` because v1 is what it
+/// implements -- v2 is a draft in which `session/load`, which it does implement,
+/// no longer exists -- and that honest answer used to cost it its instructions
+/// entirely. Buzz suppressed the user-message fallback because it believed the
+/// field had been delivered, while the agent could not read the field it was sent.
+/// Measured 2026-09-01: the agent ran on a stock prompt and could not name itself.
+///
+/// Replace this constant with the RFD's capability handshake once it lands, and
+/// delete both names.
+const S2HARNESS_NAME: &str = "s2harness";
+
 fn has_system_prompt_support(
     protocol_version: u32,
     agent_name: &str,
@@ -307,7 +327,7 @@ fn has_system_prompt_support(
 ) -> bool {
     if agent_name == "goose" {
         goose_system_prompt_supported == Some(true)
-    } else if agent_name == CLAUDE_AGENT_ACP_NAME {
+    } else if agent_name == CLAUDE_AGENT_ACP_NAME || agent_name == S2HARNESS_NAME {
         true
     } else {
         protocol_version >= 2
@@ -320,9 +340,15 @@ fn session_new_system_prompt<'a>(
     agent_name: &str,
     prompt: Option<&'a str>,
 ) -> Option<SystemPromptTransport<'a>> {
-    if is_goose || (protocol_version < 2 && agent_name != CLAUDE_AGENT_ACP_NAME) {
+    // `_meta` for both named adapters, and for s2harness it is the ONLY carrier
+    // that works: `acp`'s `NewSessionRequest` has no root-level `systemPrompt`
+    // field -- the spec forbids one -- so pydantic drops the bare field during
+    // parsing and the agent never sees it (measured 2026-09-01, a request
+    // carrying both arrived with only the `_meta` half).
+    let uses_meta = agent_name == CLAUDE_AGENT_ACP_NAME || agent_name == S2HARNESS_NAME;
+    if is_goose || (protocol_version < 2 && !uses_meta) {
         None
-    } else if agent_name == CLAUDE_AGENT_ACP_NAME {
+    } else if uses_meta {
         prompt.map(SystemPromptTransport::ClaudeMeta)
     } else {
         prompt.map(SystemPromptTransport::Field)
@@ -5285,6 +5311,25 @@ mod tests {
             None,
             "goose path must never produce a transport even when agent_name matches"
         );
+    }
+
+    /// s2harness gets its instructions through `_meta`, on v1, by name (S2).
+    ///
+    /// The regression this pins: it answers `protocolVersion: 1` truthfully, and
+    /// the version gate then read that as "cannot take a system prompt" while
+    /// ALSO suppressing the user-message fallback -- so the channel's agent
+    /// instructions reached the model through neither path.
+    #[test]
+    fn s2harness_gets_the_system_prompt_via_meta_on_protocol_v1() {
+        assert!(has_system_prompt_support(1, S2HARNESS_NAME, None));
+        assert!(matches!(
+            session_new_system_prompt(false, 1, S2HARNESS_NAME, Some("You are Fuzzy.")),
+            Some(SystemPromptTransport::ClaudeMeta("You are Fuzzy."))
+        ));
+        // And an unknown harness on v1 is unchanged: no field, so `format_prompt`
+        // still carries the instructions inside the first user message.
+        assert!(!has_system_prompt_support(1, "some-other-harness", None));
+        assert!(session_new_system_prompt(false, 1, "some-other-harness", Some("x")).is_none());
     }
 
     #[test]
