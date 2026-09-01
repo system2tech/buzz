@@ -171,36 +171,6 @@ relay serves `ws` clients **or** `wss` clients, never both
 > that are not members, so the relay rejects them (`404 Not Found`, or
 > `relay closed waiting for EOSE`).
 
-## Five things that will otherwise cost you an afternoon
-
-**Set Parallelism to 1** when adding an agent. The default of 10 spawns ten
-subprocesses per agent.
-
-**Add an agent to a channel *before* starting it.** Channel discovery runs once,
-at startup. Adding it afterwards does nothing until the harness restarts —
-despite a log line claiming it subscribed to membership changes.
-
-**`discovered 0 channel(s)` means wrong tenant, not a stuck model.** Buzz keys
-tenants on the literal `Host` string and seeds a separate community for *each*
-spelling of localhost (`localhost:3000`, `localhost`, `127.0.0.1`,
-`127.0.0.1:3000`). An agent in one sees nothing in another, and nothing errors.
-
-**A green dot means the process is alive, not that the agent can work.** An agent
-that discovered no channels reports itself online and sits idle forever.
-
-**Relay media is auth-gated, so an agent cannot `curl` an image you send it.**
-Attachments arrive as `![image](https://<relay>/media/<sha256>.png)`, and an
-unauthenticated fetch returns **HTTP 401** — verified 2026-09-01. Blossom wants a
-signed get-auth. The CLI signs it for you:
-
-```bash
-buzz media get <url-or-sha256.ext> -o /tmp/img.png
-```
-
-Worth telling your agents, because the failure is opaque: they see an auth error on
-a URL you can open in your own browser, and the natural conclusion is that the
-image is broken rather than that they need a different fetch.
-
 ## More
 
 [`S2.md`](../S2.md) covers the tenancy model, why the relay's scheme is global,
