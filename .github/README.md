@@ -123,19 +123,24 @@ In the app: **Settings → Harnesses → Add custom harness**, then:
 | label | `s2harness` |
 | command | `<absolute path to>/agent-harness/.venv/bin/s2harness` |
 | args | `acp` |
-| env | *optional* — `AHA_PROFILE=deepinfra-smoke` |
+| env | **required** — `AHA_PROFILE=deepinfra-smoke` |
 
 `command` must be the absolute path to the binary inside the virtualenv — not
 `s2harness` on your `PATH`, which will not exist.
 
-**`AHA_PROFILE` is optional, and only matters for agents you leave on "Harness
-default".** When an agent has a model picked in Buzz, Buzz applies that choice
-immediately after opening the session and the launch profile is never used. When
-the model is left as *Harness default*, Buzz sends nothing and this is what runs —
-falling back to `deepinfra-smoke` if unset. Any name from `s2harness profiles`
-works. Setting it is worth it for the same reason as any explicit default: an
-agent quietly running a model you did not choose is harder to notice than one that
-refuses to start.
+**`AHA_PROFILE` is required, and it is the only channel there is.** Buzz spawns the
+harness as a bare argv and its `--agent-args` cannot carry `--profile`, so the
+environment variable is the one way to say which model the harness launches on. Any
+name from `s2harness profiles` works.
+
+**There is deliberately no default.** `s2harness acp` refuses to start without it
+rather than pick one, because the launch profile is not merely an initial guess:
+Buzz overrides it only for agents that have a model configured, so an agent left on
+*Harness default* runs whatever this says **for its whole life**. A fallback would
+let an unattended agent bill a paid endpoint nobody chose, and the way you would
+find out is an invoice. One clear error at registration time is cheaper.
+
+If you get `s2harness acp needs a profile`, this field is missing or misspelled.
 
 If the harness shows as **`(not installed)` and greyed out**, the app has a
 cached answer rather than a missing binary: hit **refresh** on that settings
