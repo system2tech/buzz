@@ -34,10 +34,10 @@ via Hermit. Nothing installs globally.
 
 ```bash
 # Clone both repos as SIBLINGS, in the same parent directory.
-# agent-harness needs -b acp-server until system2tech/agent-harness#246 merges:
-# the `acp` subcommand Buzz drives lives only on that branch.
+# Buzz needs its `s2` branch; agent-harness needs only its default branch —
+# the `acp` subcommand Buzz drives is on `main` as of 2026-09-01.
 git clone -b s2 https://github.com/system2tech/buzz.git
-git clone -b acp-server git@github.com:system2tech/agent-harness.git
+git clone git@github.com:system2tech/agent-harness.git
 
 # Build the agent. The pip upgrade is REQUIRED — see agent-harness docs/setup.md.
 cd agent-harness
