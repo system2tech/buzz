@@ -429,23 +429,6 @@ function splitIntoSessionRuns(
 ): Array<{ sessionId: string; items: TranscriptItem[] }> {
   const runs: Array<{ sessionId: string; items: TranscriptItem[] }> = [];
   let currentRun: { sessionId: string; items: TranscriptItem[] } | null = null;
-  // S2: sessions may be CONCURRENT, so a run is keyed by session rather than by
-  // contiguity. A Buzz agent with parallelism > 1 keeps one ACP session per pool
-  // slot on the same channel (`SessionState.sessions` lives on `OwnedAgent`), and
-  // every slot stamps its own session id onto its observer frames. Splitting a new
-  // run each time the id changed therefore cut a run at almost every item once
-  // two slots were live: measured on a full 3000-event window, 2000 items became
-  // 1999 display blocks, 999 of them "Earlier observed session" dividers, plus
-  // ~990 duplicate `turn:` React keys. That divider flood is the blank region
-  // people report, and the cliff is at TWO concurrent sessions, not ten.
-  //
-  // Interleaving is now absorbed: a session already seen resumes its own run. A
-  // genuinely new session id still opens a new run, so the restart/`session/new`
-  // handling below is unchanged.
-  const runsBySession = new Map<
-    string,
-    { sessionId: string; items: TranscriptItem[] }
-  >();
   // Buffer for items that arrive before any session has resolved.
   const preSessionBuffer: TranscriptItem[] = [];
   // Buffer for session/new marker(s) (and any null-session items trailing them)
@@ -483,19 +466,6 @@ function splitIntoSessionRuns(
       continue;
     }
 
-    const existingRun = runsBySession.get(item.sessionId);
-    if (existingRun !== undefined && existingRun !== currentRun) {
-      // A session we have already opened, interleaved with another. Resume its
-      // run rather than starting a second one for the same session.
-      currentRun = existingRun;
-      if (pendingNewRunBuffer !== null) {
-        currentRun.items.push(...pendingNewRunBuffer);
-        pendingNewRunBuffer = null;
-      }
-      currentRun.items.push(item);
-      continue;
-    }
-
     if (!currentRun || item.sessionId !== currentRun.sessionId) {
       const newRun: { sessionId: string; items: TranscriptItem[] } = {
         sessionId: item.sessionId,
@@ -513,7 +483,6 @@ function splitIntoSessionRuns(
       }
       currentRun = newRun;
       runs.push(currentRun);
-      runsBySession.set(newRun.sessionId, newRun);
     } else if (pendingNewRunBuffer !== null) {
       // Same sessionId resolved again — the session/new didn't precede a new
       // session. Flush the buffer into the current run so nothing is dropped.

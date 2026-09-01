@@ -22,7 +22,6 @@ changed under a running setup.
 | session resume | `crates/buzz-acp/src/{acp,pool}.rs` | **behaviour change** |
 | s2harness system prompt | `crates/buzz-acp/src/pool.rs` | **behaviour change** |
 | transcript timestamps | `desktop/src/features/agents/ui/agentSessionTranscript.ts` | **bug fix, upstream's bug** |
-| concurrent-session grouping | `desktop/src/features/agents/ui/agentSessionTranscriptGrouping.ts` | **bug fix, upstream's bug** |
 | observer frame size ceiling | `crates/buzz-core/src/observer.rs` | **bug fix, upstream's bug** |
 
 The last three carry merge risk. The rest are additive files upstream does not
@@ -44,7 +43,7 @@ don't.
 | `SessionState.resumable` + `forget_channel` + the `session/load` attempt | Does upstream call `session/load` (or v2's `session/resume`) itself? | Drop ours entirely. |
 | — | Does Buzz still send `protocolVersion: 2` in its own `initialize` request? | It is a draft it does not implement, and it uses the answer as a feature flag. **Worth reporting to Block** rather than patching here. |
 | — | Does Buzz still put a bare `systemPrompt` at the root of `session/new`? | The spec forbids custom root fields, and the `acp` Python library therefore drops it. `_meta` is the working carrier. **Worth reporting to Block.** |
-| Runs keyed by session in `splitIntoSessionRuns` | Does upstream tolerate CONCURRENT sessions on one channel, or does it still cut a run whenever the session id changes? | Take theirs and drop ours. Keep the two S2 tests in `agentSessionTranscriptGrouping.test.mjs`; one of them inverts an upstream test, so expect a conflict there and re-read the reasoning below before resolving. |
+| — (reverted) | Does upstream tolerate CONCURRENT sessions on one channel? The divider flood is real and unfixed — 999 dividers in 1999 blocks at two live sessions. | If upstream fixes it, take theirs. Our attempt is reverted because it reordered the transcript; see the warning below before trying again. |
 | `OBSERVER_MAX_PLAINTEXT_LEN = 64_000` | Is it still 65_535? NIP-44 v2 accepts at most 65_408 (`nostr::nips::nip44::v2::MAX_SUPPORTED_PLAINTEXT_SIZE`), so 65_535 aims the trim into a dead zone. | If upstream has lowered it below 65_408, take theirs. If not, this is worth reporting to Block — it silently drops the largest observer frames. |
 | `timestamp` carried on row updates in `agentSessionTranscript.ts` | Has upstream fixed the frozen-transcript bug — do `upsertMessage`, `upsertTextItem` and `replaceLifecycleItem` pass `timestamp` into their `replaceItem` payloads? | Take theirs and drop ours. If they reshaped those helpers, re-apply the one-line-each change and keep the two S2 tests in `agentSessionTranscript.test.mjs`. |
 
@@ -188,6 +187,17 @@ Rows appeared, flickered and vanished behind a large blank region, and the view
 lagged reality by minutes. Reported 2026-09-01, distinct from the frozen-clock bug
 below and surfacing only once that was fixed. **Two independent causes, both
 upstream's, both triggered by parallelism > 1** — which is Buzz's default of 10.
+
+> ⚠ **The grouper fix was REVERTED.** Keying runs by session made the transcript
+> order items **by session instead of chronologically** — `t0 t2 t4 t1 t3 t5` for a
+> two-session interleave, verified. New activity therefore landed wherever that
+> session's run already sat in the list, usually far above the tail, so a viewer
+> watching the bottom saw nothing arrive at all. It traded 999 dividers for
+> silence, and it was worse than the bug it fixed: reported working at 17:06 and
+> dead immediately after the 17:45 build that shipped it. The divider flood
+> described below is real and still unfixed; **any fix must preserve chronological
+> order**, which means merging runs at RENDER time, not merging the runs
+> themselves.
 
 **1. The grouper assumed one session at a time.** A Buzz agent keeps one ACP
 session **per pool slot** on the same channel (`SessionState.sessions` lives on

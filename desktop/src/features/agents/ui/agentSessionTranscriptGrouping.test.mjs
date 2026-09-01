@@ -1036,21 +1036,17 @@ test("buildTranscriptDisplayBlocks_genuineSecondSession_boundaryPreserved", () =
 
 test("buildTranscriptDisplayBlocks_nonContiguousRunsSameSession_distinctBoundaryKeys", () => {
   // Scenario: sess-B frames, then sess-A frames, then sess-C frames, then
-  // sess-A frames again — i.e. INTERLEAVED sessions, which is what a Buzz agent
-  // with parallelism > 1 produces: one ACP session per pool slot on the same
-  // channel, each stamping its own id onto its frames.
+  // sess-A frames re-resolve (e.g. same agent session re-observed in a new
+  // live subscription). splitIntoSessionRuns treats each session-id change as
+  // a new run, so sess-A appears twice — once at runIndex=1 and once at
+  // runIndex=3 — yielding two session-boundary blocks both with
+  // sessionId="sess-A".
   //
-  // This test used to assert the opposite: that sess-A produced TWO runs and
-  // that a `runIndex` tiebreaker kept their React keys distinct. It was a guard
-  // against duplicate keys rather than against the duplication itself, and the
-  // duplication was the real problem — with two slots live, a run was cut at
-  // almost every item, turning 2000 items into 1999 display blocks of which 999
-  // were near-empty "Earlier observed session" dividers, plus ~990 duplicate
-  // `turn:` keys. Measured 2026-09-01 (S2).
-  //
-  // `splitIntoSessionRuns` now keys runs by session, so a session already seen
-  // resumes its own run. One run per session, one boundary per session, and the
-  // key-distinctness this test was written to protect holds by construction.
+  // The React key for a session-boundary is
+  //   `session-boundary:${sessionId}:${runIndex}`
+  // Without the runIndex tiebreaker the two sess-A boundaries share the same
+  // key, causing React to silently duplicate or omit children. This test
+  // asserts the runIndex tiebreaker keeps the keys distinct.
   const items = [
     sessionItem("b-item", "sess-B", "2026-07-08T00:00:01.000Z"),
     sessionItem("a-item", "sess-A", "2026-07-08T00:00:02.000Z"),
@@ -1061,21 +1057,22 @@ test("buildTranscriptDisplayBlocks_nonContiguousRunsSameSession_distinctBoundary
   const blocks = buildTranscriptDisplayBlocks(items, "sess-A");
   const boundaryBlocks = blocks.filter((b) => b.kind === "session-boundary");
 
-  // Three sessions → three runs → two boundaries (the first run needs none).
+  // Four distinct session runs → three boundaries (before sess-A, before
+  // sess-C, and before the re-occurring sess-A).
   assert.equal(
     boundaryBlocks.length,
-    2,
-    "sess-A interleaves back into its own run rather than opening a second",
+    3,
+    "three boundaries for four runs (sess-B, sess-A, sess-C, sess-A)",
   );
 
-  // Exactly one boundary per session -- the collision is gone at its source.
+  // Two boundaries share sessionId="sess-A" (the collision case pre-fix).
   const sessABoundaries = boundaryBlocks.filter(
     (b) => b.sessionId === "sess-A",
   );
   assert.equal(
     sessABoundaries.length,
-    1,
-    "sess-A gets one boundary, not one per contiguous appearance",
+    2,
+    "two boundary blocks both carry sessionId=sess-A (the collision the fix guards)",
   );
 
   // The runIndex values must be distinct across ALL boundary blocks so that
@@ -1874,51 +1871,5 @@ test("getDisplayBlockKey_firstTurnReorder_keysStableAcrossReorder", () => {
     partialKeys,
     fullKeys,
     "block key identities must be identical before and after session_resolved seals the open batch (order may differ)",
-  );
-});
-
-// S2 ── concurrent sessions must not flood the view with dividers ─────────────
-
-test("interleaved sessions do not turn every item into its own run", () => {
-  // A Buzz agent with parallelism > 1 keeps one ACP session per pool slot on the
-  // same channel, so its observer stream carries interleaved session ids. Under
-  // contiguity-based splitting that cut a run at almost every item: measured on a
-  // full 3000-event window, 2000 items became 1999 display blocks, 999 of them
-  // near-empty "Earlier observed session" dividers -- the blank region users
-  // report -- plus ~990 duplicate `turn:` React keys.
-  //
-  // The cliff is at TWO concurrent sessions, so that is what this asserts.
-  const items = [];
-  for (let i = 0; i < 200; i += 1) {
-    items.push(
-      sessionItem(
-        `item-${i}`,
-        `sess-${i % 2}`,
-        `2026-07-08T00:00:${String(i % 60).padStart(2, "0")}.000Z`,
-      ),
-    );
-  }
-
-  const blocks = buildTranscriptDisplayBlocks(items, "sess-1");
-  const boundaries = blocks.filter((b) => b.kind === "session-boundary");
-
-  // The metric that matters: dividers. Before the fix each of the 200 alternations
-  // cut a run, so nearly every item was preceded by an "Earlier observed session"
-  // row. Two sessions now mean exactly one boundary between them.
-  assert.equal(
-    boundaries.length,
-    1,
-    `two sessions must yield one boundary, not one per alternation (got ${boundaries.length})`,
-  );
-  // The item rows themselves are unaffected -- these fixtures share no turn, so
-  // 200 items are legitimately 200 rows. What is gone is the divider between each.
-  assert.equal(blocks.length, items.length + boundaries.length);
-
-  // The duplicate-key flood the divider explosion carried with it.
-  const keys = blocks.map((b) => getDisplayBlockKey(b));
-  assert.equal(
-    new Set(keys).size,
-    keys.length,
-    "every display block has a distinct React key",
   );
 });
