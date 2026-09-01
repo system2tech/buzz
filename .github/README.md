@@ -123,17 +123,9 @@ In the app: **Settings → Harnesses → Add custom harness**, then:
 | label | `s2harness` |
 | command | `<absolute path to>/agent-harness/.venv/bin/s2harness` |
 | args | `acp` |
-| env | *optional* — `AHA_PROFILE=deepinfra-smoke` |
 
 `command` must be the absolute path to the binary inside the virtualenv — not
 `s2harness` on your `PATH`, which will not exist.
-
-**`AHA_PROFILE` is optional.** You pick an agent's model in Buzz when you create
-it, and that choice is applied as soon as the session opens — so the harness's own
-launch profile is a placeholder that gets overridden before you ever talk to the
-agent. Set this only if you want to pin what the harness starts on; any name from
-`s2harness profiles` works.
-
 
 If the harness shows as **`(not installed)` and greyed out**, the app has a
 cached answer rather than a missing binary: hit **refresh** on that settings
