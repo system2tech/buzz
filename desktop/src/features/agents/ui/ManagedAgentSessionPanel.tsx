@@ -38,6 +38,7 @@ import {
   useArchivedChannelEvents,
 } from "./useObserverEvents";
 import { buildTranscriptState } from "./agentSessionTranscript";
+import { limitToRecentTurns } from "./recentTurnWindow";
 
 type ManagedAgentSessionPanelProps = {
   agent: Pick<ManagedAgent, "pubkey" | "name" | "status"> & {
@@ -112,8 +113,14 @@ export function ManagedAgentSessionPanel({
   // Derive transcript once from the combined raw window. When transcriptOverride
   // is set (e.g. E2E snapshot specs), bypass both — the caller supplies the full
   // transcript directly.
+  // S2: capped to recent turns. The store retains 3000 events per agent and
+  // rebuilds the transcript from the whole retained window on every append, so a
+  // long session re-processes thousands of events per frame and hands React a
+  // fresh array each time -- which renders as recent rows flickering and then
+  // vanishing. Session-scoped rows (the system-prompt card) survive the window;
+  // the raw rail below still shows everything. See `recentTurnWindow.ts`.
   const derivedTranscript = React.useMemo(
-    () => buildTranscriptState(combinedEvents).items,
+    () => buildTranscriptState(limitToRecentTurns(combinedEvents)).items,
     [combinedEvents],
   );
   const displayTranscript = transcriptOverride ?? derivedTranscript;

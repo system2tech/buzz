@@ -22,6 +22,7 @@ changed under a running setup.
 | session resume | `crates/buzz-acp/src/{acp,pool}.rs` | **behaviour change** |
 | s2harness system prompt | `crates/buzz-acp/src/pool.rs` | **behaviour change** |
 | transcript timestamps | `desktop/src/features/agents/ui/agentSessionTranscript.ts` | **bug fix, upstream's bug** |
+| transcript turn window | `desktop/src/features/agents/ui/{recentTurnWindow.ts,ManagedAgentSessionPanel.tsx}` | **bug fix, upstream's bug** |
 
 The last three carry merge risk. The rest are additive files upstream does not
 have. The transcript fix is the one to offer upstream first — it is their bug, it
@@ -210,6 +211,40 @@ Two tests in `agentSessionTranscript.test.mjs` pin it, one per row kind. Not
 fixed, and worth doing separately: `turn_liveness` (emitted every ~10s during a
 turn) has no rendering branch at all, so a quiet stretch of a long turn still
 shows nothing new.
+
+## Flickering transcripts on a long session (`desktop/src/features/agents/ui/`)
+
+### The problem
+
+A second, distinct bug from the frozen-clock one above, and it showed up once that
+was fixed: on a session long enough to fill the observer window, recent rows
+**flashed, flickered and disappeared**. Reported 2026-09-01.
+
+`observerRelayStore.ts` retains up to `MAX_OBSERVER_EVENTS` (3000) events per
+agent and **rebuilds the transcript from the whole retained window on every
+append** — its own comment says so. So a busy agent whose window is full
+re-processes thousands of events per frame, and because each rebuild produces a
+fresh array, React remounts the list every time.
+
+### The change
+
+`recentTurnWindow.ts` caps the events fed to the transcript builder at the last
+`TRANSCRIPT_TURN_WINDOW` (12) turns. Bounding the rebuild fixes both halves at
+once: it stops being expensive, and the list stops thrashing.
+
+Two decisions worth keeping:
+
+- **Session-scoped events always survive the window.** The system-prompt card is
+  emitted on `session/new` with no turn id, and it is the row people look for when
+  they want to know what an agent was told. Dropping it for being old would be a
+  worse bug than the flicker.
+- **Recency is where a turn LAST appears**, not first. With interleaved turns, a
+  first-appearance ranking would drop the turn still producing output.
+
+The cap is on the TRANSCRIPT only — the raw JSON-RPC rail still shows the full
+retained window, which is where to go for the untruncated stream. Seven tests
+cover it, including the reference-equality fast path that keeps short sessions
+allocation-free.
 
 ### The size ratchet, and why it was skipped once
 
