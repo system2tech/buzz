@@ -123,11 +123,19 @@ In the app: **Settings → Harnesses → Add custom harness**, then:
 | label | `s2harness` |
 | command | `<absolute path to>/agent-harness/.venv/bin/s2harness` |
 | args | `acp` |
-| env | `AHA_PROFILE=deepinfra-smoke` |
+| env | *optional* — `AHA_PROFILE=deepinfra-smoke` |
 
 `command` must be the absolute path to the binary inside the virtualenv — not
-`s2harness` on your `PATH`, which will not exist. `AHA_PROFILE` picks the model;
-any name from `s2harness profiles` works.
+`s2harness` on your `PATH`, which will not exist.
+
+**`AHA_PROFILE` is optional, and only matters for agents you leave on "Harness
+default".** When an agent has a model picked in Buzz, Buzz applies that choice
+immediately after opening the session and the launch profile is never used. When
+the model is left as *Harness default*, Buzz sends nothing and this is what runs —
+falling back to `deepinfra-smoke` if unset. Any name from `s2harness profiles`
+works. Setting it is worth it for the same reason as any explicit default: an
+agent quietly running a model you did not choose is harder to notice than one that
+refuses to start.
 
 If the harness shows as **`(not installed)` and greyed out**, the app has a
 cached answer rather than a missing binary: hit **refresh** on that settings
