@@ -302,6 +302,7 @@ function upsertMessage(
     if (existing?.type === "message") {
       replaceItem(d, currentKey, {
         ...existing,
+        timestamp, // S2 (see S2-CHANGES.md)
         text: existing.text + text,
         channelId: ctx.channelId,
         turnId: ctx.turnId ?? existing.turnId,
@@ -349,6 +350,7 @@ function upsertTextItem(
   if (existing && existing.type === type) {
     replaceItem(d, id, {
       ...existing,
+      timestamp, // S2 (see S2-CHANGES.md)
       text:
         type === "lifecycle"
           ? joinLifecycleText(existing.text, text)
@@ -461,6 +463,7 @@ function replaceLifecycleItem(
   if (existing?.type === "lifecycle") {
     replaceItem(d, id, {
       ...existing,
+      timestamp, // S2 (see S2-CHANGES.md)
       renderClass,
       title,
       text,

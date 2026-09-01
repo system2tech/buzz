@@ -2125,3 +2125,83 @@ test("buildTranscript session/new bare systemPrompt field takes precedence over 
     "_meta.systemPrompt.append must not appear when bare field is present",
   );
 });
+
+// S2 ── a long turn must not render as a frozen transcript ────────────────────
+//
+// The transcript folds a whole turn into a small fixed set of rows: one
+// assistant bubble, one usage line. That is deliberate. What was not deliberate
+// is that updating a row dropped the new frame's timestamp and kept the one it
+// was created with — so on a long turn the rows stayed current while the clock
+// stopped, and the view read as "the agent stopped working an hour ago".
+//
+// Reported 2026-09-01 against a real session whose context was nearly full
+// (232548/262144 tokens — i.e. a very long turn), where the newest rendered item
+// sat at 14:01 while raw activity had reached event #679 at 15:08.
+
+test("an updated assistant message carries the newest frame's timestamp", () => {
+  const chunk = (seq, timestamp, text) => ({
+    ...baseEvent,
+    seq,
+    timestamp,
+    kind: "acp_read",
+    payload: {
+      method: "session/update",
+      params: {
+        sessionId: baseEvent.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text },
+        },
+      },
+    },
+  });
+
+  const items = buildTranscript([
+    chunk(1, "2026-06-18T14:00:00Z", "thinking"),
+    chunk(2, "2026-06-18T14:30:00Z", " harder"),
+    chunk(3, "2026-06-18T15:08:00Z", " and done"),
+  ]);
+
+  const messages = items.filter((item) => item.type === "message");
+  assert.equal(
+    messages.length,
+    1,
+    "chunks of one turn coalesce into one bubble",
+  );
+  assert.equal(messages[0].text, "thinking harder and done");
+  assert.equal(
+    messages[0].timestamp,
+    "2026-06-18T15:08:00Z",
+    "the row must show when it was last updated, not when it was created",
+  );
+});
+
+test("an updated usage row carries the newest frame's timestamp", () => {
+  const usage = (seq, timestamp, used) => ({
+    ...baseEvent,
+    seq,
+    timestamp,
+    kind: "acp_read",
+    payload: {
+      method: "session/update",
+      params: {
+        sessionId: baseEvent.sessionId,
+        update: { sessionUpdate: "usage_update", used, size: 262144 },
+      },
+    },
+  });
+
+  const items = buildTranscript([
+    usage(1, "2026-06-18T14:01:00Z", 57255),
+    usage(2, "2026-06-18T15:08:00Z", 232548),
+  ]);
+
+  const rows = items.filter((item) => item.title === "Usage");
+  assert.equal(rows.length, 1, "one usage row per turn");
+  assert.match(rows[0].text, /232548/, "the row shows the latest reading");
+  assert.equal(
+    rows[0].timestamp,
+    "2026-06-18T15:08:00Z",
+    "and the time that reading was taken",
+  );
+});
