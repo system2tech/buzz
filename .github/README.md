@@ -85,8 +85,19 @@ In the app: **create an identity → create a channel → add an agent** on the
 ## Part 2B — the team relay
 
 ```bash
-. ./bin/activate-hermit && just desktop-standalone
+. ./bin/activate-hermit
+BUZZ_VITE_PORT=13914 BUZZ_INSTANCE_SLUG=team \
+  BUZZ_RELAY_URL=wss://buzz.system2ai.com just desktop-standalone
 ```
+
+**`BUZZ_VITE_PORT=13914` is not optional here.** The dev build serves its UI from a
+local port, and that port is normally derived from a hash of *where you cloned the
+repo* — so it differs on every machine. The relay only accepts requests from
+origins on its allowlist, so an unpinned port gets your very first request blocked
+by the browser: the UI says **"Load failed"** and nothing appears in the terminal,
+because the request never leaves the webview. Pinning it to the one port the relay
+allows avoids that. (A packaged App Store build has no dev server and no port, so
+this does not apply to it.)
 
 **`desktop-standalone`, not `dev`.** `dev` starts its own local relay and would
 ignore the team one entirely.

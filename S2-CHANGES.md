@@ -23,6 +23,7 @@ changed under a running setup.
 | s2harness system prompt | `crates/buzz-acp/src/pool.rs` | **behaviour change** |
 | transcript timestamps | `desktop/src/features/agents/ui/agentSessionTranscript.ts` | **bug fix, upstream's bug** |
 | observer frame size ceiling | `crates/buzz-core/src/observer.rs` | **bug fix, upstream's bug** |
+| overridable dev vite port | `scripts/instance-env.sh` | **one-line generalisation; offer upstream** |
 
 The last three carry merge risk. The rest are additive files upstream does not
 have. The transcript fix is the one to offer upstream first — it is their bug, it
@@ -45,6 +46,7 @@ don't.
 | — | Does Buzz still put a bare `systemPrompt` at the root of `session/new`? | The spec forbids custom root fields, and the `acp` Python library therefore drops it. `_meta` is the working carrier. **Worth reporting to Block.** |
 | — (reverted) | Does upstream tolerate CONCURRENT sessions on one channel? The divider flood is real and unfixed — 999 dividers in 1999 blocks at two live sessions. | If upstream fixes it, take theirs. Our attempt is reverted because it reordered the transcript; see the warning below before trying again. |
 | `OBSERVER_MAX_PLAINTEXT_LEN = 64_000` | Is it still 65_535? NIP-44 v2 accepts at most 65_408 (`nostr::nips::nip44::v2::MAX_SUPPORTED_PLAINTEXT_SIZE`), so 65_535 aims the trim into a dead zone. | If upstream has lowered it below 65_408, take theirs. If not, this is worth reporting to Block — it silently drops the largest observer frames. |
+| `BUZZ_VITE_PORT` respects an override in `scripts/instance-env.sh` | Does upstream let the dev vite port be pinned, or is it still `export BUZZ_VITE_PORT=$BASE_PORT` unconditionally? | Take theirs. This is a one-line change to a file otherwise identical to upstream and **worth offering to Block** — any team running dev builds against a shared relay hits it. |
 | `timestamp` carried on row updates in `agentSessionTranscript.ts` | Has upstream fixed the frozen-transcript bug — do `upsertMessage`, `upsertTextItem` and `replaceLifecycleItem` pass `timestamp` into their `replaceItem` payloads? | Take theirs and drop ours. If they reshaped those helpers, re-apply the one-line-each change and keep the two S2 tests in `agentSessionTranscript.test.mjs`. |
 
 Two more findings for upstream, neither of which we patch:
@@ -176,6 +178,47 @@ nothing needs it yet — see the watch list above for when to replace both names
 both are small and both are ours by one branch only. A test
 (`s2harness_gets_the_system_prompt_via_meta_on_protocol_v1`) pins the behaviour
 and will fail loudly if upstream reshapes either.
+
+---
+
+## "Load failed" joining a shared relay from a dev build (`scripts/instance-env.sh`)
+
+### The problem
+
+A second developer's dev build could not claim an invite to the team relay: the
+onboarding step reported only **"Load failed"**, and nothing appeared in the
+terminal. The same invite worked in a packaged binary on the same machine.
+
+The dev build serves its UI from a Vite port derived from a **hash of the
+checkout's absolute path**, so the webview's ORIGIN differs per machine:
+
+```
+/Users/nlgkhoi/Desktop/github-repos/buzz  ->  http://localhost:13914
+/Users/lgk1910/gitlab-repos/buzz          ->  http://localhost:24770
+```
+
+A relay's `BUZZ_CORS_ORIGINS` is a fixed list, and ours had only 13914. So the
+browser blocked the request before it left the webview — hence an HTTP-less error
+and a silent terminal. The packaged binary is immune because it serves bundled
+assets from `tauri://localhost`, one fixed origin on every install, which is
+already allowlisted.
+
+Everything else checked out: the joiner was a relay member, the agent was
+bot-roled in the shared channel, its NIP-OA attestation verified against the
+owner's key, and the owner-published policy record said `respond_to: anyone`.
+
+### The change
+
+`BUZZ_VITE_PORT` now respects a pre-set value — the same
+`${VAR:-default}` shape the file already uses for `BUZZ_RELAY_URL` two lines
+below. The hash stays the default, so nothing changes for local-only work; anyone
+talking to a shared relay pins the one port that relay allows. `BUZZ_HMR_PORT` was
+also switched to derive from the RESOLVED vite port rather than from the hash,
+or pinning one would leave hot reload pointing at a port Vite is not serving.
+
+**No relay change and no restart**, which was the point: the alternative was one
+`BUZZ_CORS_ORIGINS` entry per developer per clone path, silently failing for each
+new one until someone asked.
 
 ---
 

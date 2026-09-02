@@ -13,8 +13,22 @@ WORKTREE_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 # gets the same ports. This keeps the Tauri dev config stable between runs and
 # preserves Cargo's build cache.
 BASE_PORT=$(python3 -c "import hashlib,sys; h=int(hashlib.sha256(sys.argv[1].encode()).hexdigest(), 16); print(10000 + h % 55000)" "$WORKTREE_ROOT")
-export BUZZ_VITE_PORT=$BASE_PORT
-export BUZZ_HMR_PORT=$((BASE_PORT + 1))
+# OVERRIDABLE, like BUZZ_RELAY_URL below (S2). The hash keeps two worktrees on one
+# machine from colliding, which is what it is for -- but it also makes the dev
+# webview's ORIGIN depend on where the repo was cloned, and a relay's
+# `BUZZ_CORS_ORIGINS` is a fixed list. So a second developer whose path hashes
+# differently is blocked by CORS on the first request they make: the browser kills
+# the fetch, the UI says only "Load failed", and nothing reaches the Rust side or
+# the terminal. Measured 2026-09-02 -- two checkouts of this repo hash to 13914 and
+# 24770, and only the first was allowlisted.
+#
+# Allowing an override lets everyone talking to a SHARED relay pin the one port
+# that relay allows, instead of the relay carrying an entry per developer per clone
+# path. The hash stays the default, so nothing changes for local-only work.
+export BUZZ_VITE_PORT="${BUZZ_VITE_PORT:-$BASE_PORT}"
+# Derived from the RESOLVED vite port, not from BASE_PORT (S2): pinning the vite
+# port must move HMR with it, or hot reload points at a port Vite is not serving.
+export BUZZ_HMR_PORT=$((BUZZ_VITE_PORT + 1))
 export BUZZ_RELAY_PORT=3000
 export VITE_PORT="$BUZZ_VITE_PORT"
 export VITE_HMR_PORT="$BUZZ_HMR_PORT"
