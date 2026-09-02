@@ -30,7 +30,7 @@ via Hermit. Nothing installs globally.
 
 ---
 
-## Part 1 — the agent (both paths)
+## The agent (both paths)
 
 ```bash
 # Clone both repos as SIBLINGS, in the same parent directory.
@@ -63,7 +63,7 @@ harness](#registering-the-harness) once it is running.
 
 ---
 
-## Part 2A — your own relay
+## Path A — your own relay
 
 ```bash
 . ./bin/activate-hermit && just dev
@@ -76,7 +76,7 @@ left running by an earlier session.
 In the app: **create an identity → create a channel → add an agent** on the
 `s2harness` runtime.
 
-## Part 2B — the team relay
+## Path B — the team relay
 
 ```bash
 . ./bin/activate-hermit
@@ -84,34 +84,11 @@ BUZZ_VITE_PORT=13914 BUZZ_INSTANCE_SLUG=team \
   BUZZ_RELAY_URL=wss://buzz.system2ai.com just desktop-standalone
 ```
 
-**`BUZZ_VITE_PORT=13914` is not optional here.** The dev build serves its UI from a
-local port, and that port is normally derived from a hash of *where you cloned the
-repo* — so it differs on every machine. The relay only accepts requests from
-origins on its allowlist, so an unpinned port gets your very first request blocked
-by the browser: the UI says **"Load failed"** and nothing appears in the terminal,
-because the request never leaves the webview. Pinning it to the one port the relay
-allows avoids that. (A packaged App Store build has no dev server and no port, so
-this does not apply to it.)
-
-**`desktop-standalone`, not `dev`.** `dev` starts its own local relay and would
-ignore the team one entirely.
-
-You need two things from whoever runs the relay:
-
-1. **An invite link**, of the form `https://<relay>/invite/<code>`. It carries
-   the relay address, so it is the only thing you need to paste. Treat it like a
-   password — anyone holding it can join.
-2. Nothing else. Your model key and harness are already set up from Part 1.
-
 In the app: **create an identity**, then at *Join or create a community* choose
 **"I already have a community" → "I'm a member or admin"** and paste the invite
-link.
+link, of the form `https://<relay>/invite/<code>`.
 
-> Not "I own the community" — despite being the truthful-sounding option, it
-> routes to Block's hosted signup, which is a different product. And not "Join a
-> community", which wants an invite *code* rather than a link.
-
-Then **add an agent** on the `s2harness` runtime, exactly as in Path A.
+> Not "Join a community", which wants an invite *code* rather than a link.
 
 ---
 
@@ -128,28 +105,18 @@ Once the app is running: **Settings → Agents**, then under **Agent runtimes** 
 
 Leave **Env vars**, **Docs URL** and **Install hint** empty. Save.
 
-`Command` must be the absolute path to the binary inside the virtualenv — not
-`s2harness` on your `PATH`, which will not exist. And `acp` belongs in
-**Arguments**, not appended to Command: the field is a command, not a shell line,
-so `.../s2harness acp` there is one filename that does not exist.
+Note: `Command` must be the absolute path to the binary inside the virtualenv — not
+`s2harness` on your `PATH`, which will not exist.
 
-It should then appear in the **Agent runtimes** list marked **Ready**, alongside
-Claude Code and the others. If it says **`(not installed)`** or stays unready, use
-the **Check again** button at the top right of that section — the status is cached,
-and the button runs a live probe. It takes 20–60 seconds because it re-probes every
-runtime, not just yours.
+## Create your own agent
 
-The registration is stored per app instance, under
-`~/Library/Application Support/xyz.block.buzz.app.dev.<slug>/custom_harnesses/`.
-The instance is derived from your **checked-out branch**, so a harness registered on
-one branch is invisible on another. If the runtime disappears after a `git switch`,
-that is why — register it again on the branch you are using.
+**Agents → "+"**, then fill in the fields to create your agent.
 
 ## Mobile
 
 **Team relay only.** Install Buzz from the App Store — there is no build step.
 
-Then pair it: **desktop → Settings → Mobile**, and scan the QR code with the
+Then pair it: **Settings → Mobile**, and scan the QR code with the
 phone. Pairing carries your identity across, so the phone is *you* — same agents,
 same permissions — rather than a second person in the workspace.
 
