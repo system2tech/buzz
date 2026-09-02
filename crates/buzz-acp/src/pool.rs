@@ -32,7 +32,7 @@ use uuid::Uuid;
 use crate::acp::{
     extract_model_config_options, extract_model_state, extract_thought_level_config_id,
     model_in_catalog, resolve_model_switch_method, AcpClient, AcpError, EnvVar, McpServer,
-    ModelSwitchMethod, SessionNewResponse, StopReason, SystemPromptTransport,
+    ModelSwitchMethod, StopReason, SystemPromptTransport,
 };
 use crate::config::{compose_session_title, DedupMode, PermissionMode};
 use crate::observer;
@@ -136,15 +136,6 @@ pub struct SessionState {
     /// Per-channel successful-delivery state. Created with the ACP session and
     /// cleared atomically with every invalidation path.
     pub deliveries: HashMap<Uuid, ChannelDeliveryState>,
-    /// channel_id -> the last session id held there, kept ACROSS invalidation (S2).
-    ///
-    /// `sessions` is the live session; this is the one that can be reopened.
-    /// They are separate because every invalidation path clears `sessions`, and
-    /// a resume candidate cleared alongside it would be no candidate at all.
-    ///
-    /// Cleared only by `forget_channel`/`forget_all` — the deliberate paths.
-    /// See S2-CHANGES.md § Session resume.
-    pub resumable: HashMap<Uuid, String>,
 }
 
 impl SessionState {
@@ -162,22 +153,6 @@ impl SessionState {
         }
     }
 
-    /// Discard a prompt source's session AND its resume candidate (S2).
-    ///
-    /// The deliberate counterpart to `invalidate`.
-    pub fn forget(&mut self, source: &PromptSource) {
-        match source {
-            PromptSource::Channel(cid) => {
-                self.forget_channel(cid);
-            }
-            PromptSource::Heartbeat => {
-                self.heartbeat_session = None;
-                self.heartbeat_turn_count = 0;
-                self.heartbeat_standing_context_sent = false;
-            }
-        }
-    }
-
     /// Invalidate a single channel's session and turn counter.
     /// Returns `true` if the channel had an active session.
     pub fn invalidate_channel(&mut self, channel_id: &Uuid) -> bool {
@@ -185,37 +160,11 @@ impl SessionState {
         self.core_sections.remove(channel_id);
         self.canvas_sections.remove(channel_id);
         self.deliveries.remove(channel_id);
-        // S2: demoted, not dropped. This is the RECOVERABLE path — the session
-        // ended for a reason nobody asked for (process exit, timeout, model
-        // change), so the next one can reopen it. Callers wanting a genuine
-        // reset use `forget_channel`.
-        match self.sessions.remove(channel_id) {
-            Some(session_id) => {
-                self.resumable.insert(*channel_id, session_id);
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// Invalidate a channel AND discard its resume candidate (S2).
-    ///
-    /// The deliberate path: someone asked for a fresh start — the owner sent
-    /// `!rotate`, or the agent was removed from the channel and upstream's rule
-    /// is that stale sessions must not be reused. Reopening here would defeat
-    /// the request, so the id is dropped rather than demoted.
-    pub fn forget_channel(&mut self, channel_id: &Uuid) -> bool {
-        let had = self.invalidate_channel(channel_id);
-        self.resumable.remove(channel_id);
-        had
+        self.sessions.remove(channel_id).is_some()
     }
 
     /// Invalidate all sessions and turn counters (e.g. after agent exit).
     pub fn invalidate_all(&mut self) {
-        // S2: same demotion as `invalidate_channel`, for the same reason.
-        for (channel_id, session_id) in self.sessions.drain() {
-            self.resumable.insert(channel_id, session_id);
-        }
         self.sessions.clear();
         self.turn_counts.clear();
         self.heartbeat_session = None;
@@ -302,22 +251,19 @@ const CLAUDE_AGENT_ACP_NAME: &str = "@agentclientprotocol/claude-agent-acp";
 
 /// Name reported by S2's own harness (`s2harness acp`). It reads
 /// `_meta.systemPrompt.append` exactly as `claude-agent-acp` does, so it belongs
-/// on the same branch.
+/// on the same branch (S2).
 ///
-/// **Named, not version-gated, and that is deliberate (S2).** The version gate
-/// below implements an early revision of ACP RFD #1237, which proposed the
-/// protocol version as the capability signal; the RFD has since moved to a
-/// capability advertised at `initialize`, and nothing here follows it yet. In the
-/// meantime a version number is doing a feature flag's job, and it does the job
-/// badly: `s2harness` answers `protocolVersion: 1` because v1 is what it
-/// implements -- v2 is a draft in which `session/load`, which it does implement,
-/// no longer exists -- and that honest answer used to cost it its instructions
-/// entirely. Buzz suppressed the user-message fallback because it believed the
-/// field had been delivered, while the agent could not read the field it was sent.
-/// Measured 2026-09-01: the agent ran on a stock prompt and could not name itself.
+/// Named rather than version-gated, deliberately. The gate below implements an
+/// early revision of ACP RFD #1237, which proposed the protocol version as the
+/// capability signal; the RFD has since moved to a capability advertised at
+/// `initialize`, and nothing here follows it yet. Meanwhile `s2harness` answers
+/// `protocolVersion: 1` because v1 is what it implements -- and that honest answer
+/// used to cost it its instructions entirely: this gate suppressed the
+/// user-message fallback believing the field had been delivered, while the harness
+/// could not read the field it was sent. Measured 2026-09-01 -- the agent ran on a
+/// stock prompt and could not name itself.
 ///
-/// Replace this constant with the RFD's capability handshake once it lands, and
-/// delete both names.
+/// Replace both names with the RFD's capability handshake once it lands.
 const S2HARNESS_NAME: &str = "s2harness";
 
 fn has_system_prompt_support(
@@ -343,8 +289,8 @@ fn session_new_system_prompt<'a>(
     // `_meta` for both named adapters, and for s2harness it is the ONLY carrier
     // that works: `acp`'s `NewSessionRequest` has no root-level `systemPrompt`
     // field -- the spec forbids one -- so pydantic drops the bare field during
-    // parsing and the agent never sees it (measured 2026-09-01, a request
-    // carrying both arrived with only the `_meta` half).
+    // parsing and the agent never sees it (measured 2026-09-01, a request carrying
+    // both arrived with only the `_meta` half). (S2)
     let uses_meta = agent_name == CLAUDE_AGENT_ACP_NAME || agent_name == S2HARNESS_NAME;
     if is_goose || (protocol_version < 2 && !uses_meta) {
         None
@@ -405,19 +351,14 @@ fn apply_completed_before_control_signal(
     source: &PromptSource,
     control_signal: &ControlSignal,
 ) {
-    // Both end the live session so the next turn creates a new one; for
-    // SwitchModel the caller has already set `desired_model`, so that new
-    // session applies the model on creation.
-    //
-    // S2: they differ in whether the CONVERSATION should survive. `!rotate` is
-    // someone asking for a clean slate, so its resume candidate goes too. A
-    // model switch is a configuration change to the same ongoing thread, so the
-    // conversation is reopened under the new model.
-    // See S2-CHANGES.md § Session resume.
-    match control_signal {
-        ControlSignal::Rotate => state.forget(source),
-        ControlSignal::SwitchModel { .. } => state.invalidate(source),
-        _ => {}
+    // Rotate and SwitchModel both invalidate so the next turn creates a fresh
+    // session. For SwitchModel the caller has already set `desired_model`, so
+    // the fresh session applies the new model on its next creation.
+    if matches!(
+        control_signal,
+        ControlSignal::Rotate | ControlSignal::SwitchModel { .. }
+    ) {
+        state.invalidate(source);
     }
 }
 
@@ -1037,10 +978,7 @@ impl AgentPool {
         let mut count = 0;
         for slot in &mut self.agents {
             if let Some(agent) = slot.as_mut() {
-                // S2: forget, not invalidate. Called when the agent is
-                // removed from a channel, or on an owner `!rotate` — both ask
-                // for a clean slate, so the resume candidate goes too.
-                if agent.state.forget_channel(&channel_id) {
+                if agent.state.invalidate_channel(&channel_id) {
                     count += 1;
                 }
             }
@@ -1189,87 +1127,6 @@ struct NewSessionChannelContext<'a> {
     channel_type: Option<&'a str>,
 }
 
-/// Where an agent remembers its per-channel session ids between processes (S2).
-///
-/// Under the session `cwd` and keyed by agent name, because a workspace can be
-/// SHARED: two agents pointed at one directory would otherwise overwrite each
-/// other's map and reopen a conversation belonging to someone else.
-fn resume_store_path(cwd: &str, agent_name: &str) -> std::path::PathBuf {
-    let slug: String = agent_name
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    std::path::Path::new(cwd).join(format!(".buzz-acp-resume-{slug}.json"))
-}
-
-/// Read the durable resume map (S2). Best-effort: any failure is a cold start,
-/// which is the behaviour without this file at all.
-fn load_resume_store(cwd: &str, agent_name: &str) -> HashMap<Uuid, String> {
-    let path = resume_store_path(cwd, agent_name);
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return HashMap::new();
-    };
-    serde_json::from_str::<HashMap<Uuid, String>>(&text).unwrap_or_else(|error| {
-        tracing::warn!(
-            target: "pool::session",
-            path = %path.display(), ?error,
-            "resume store unreadable; continuing without it"
-        );
-        HashMap::new()
-    })
-}
-
-/// Record one channel's session id durably (S2).
-///
-/// `SessionState` is memory-only, so without this a restart of buzz-acp itself
-/// cannot even NAME the session to reopen — which is the case that motivated
-/// resume in the first place.
-fn save_resume_entry(cwd: &str, agent_name: &str, channel_id: Uuid, session_id: &str) {
-    let path = resume_store_path(cwd, agent_name);
-    let mut map = load_resume_store(cwd, agent_name);
-    if map.get(&channel_id).map(String::as_str) == Some(session_id) {
-        return; // unchanged; do not rewrite on every turn
-    }
-    map.insert(channel_id, session_id.to_string());
-    let Ok(text) = serde_json::to_string(&map) else {
-        return;
-    };
-    if let Err(error) = std::fs::write(&path, text) {
-        // Not fatal: this turn is fine, only a later restart starts cold.
-        tracing::warn!(
-            target: "pool::session",
-            path = %path.display(), ?error,
-            "could not persist the resume store; a restart will start cold"
-        );
-    }
-}
-
-/// The plain `session/new` path, factored out so the resume attempt above has a
-/// single fallback rather than two copies of the call (S2).
-async fn open_new_session(
-    agent: &mut OwnedAgent,
-    ctx: &PromptContext,
-    is_goose: bool,
-    mcp_servers: Vec<McpServer>,
-    combined_system_prompt: Option<&str>,
-    session_title: Option<&str>,
-) -> Result<SessionNewResponse, AcpError> {
-    agent
-        .acp
-        .session_new_full(
-            &ctx.cwd,
-            mcp_servers,
-            session_new_system_prompt(
-                is_goose,
-                agent.protocol_version,
-                &agent.agent_name,
-                combined_system_prompt,
-            ),
-            session_title,
-        )
-        .await
-}
-
 async fn create_session_and_apply_model(
     agent: &mut OwnedAgent,
     ctx: &PromptContext,
@@ -1308,80 +1165,20 @@ async fn create_session_and_apply_model(
         ctx.session_title.as_deref(),
     );
 
-    // S2: reopen before creating. A channel whose session was invalidated by
-    // something nobody asked for — a process exit, a timeout, a model switch —
-    // still has its history on the agent side, and `session/new` would abandon
-    // it silently while the human, who can read the whole thread, gets no
-    // signal that the agent stopped remembering it.
-    //
-    // Candidates come from memory first (this process), then the durable store
-    // (this process is a restart). Deliberate resets cleared both, so nothing
-    // is offered here for a `!rotate` or a channel removal.
-    let resume_candidate = channel
-        .id
-        .filter(|_| agent.acp.load_session_supported())
-        .and_then(|cid| {
-            agent
-                .state
-                .resumable
-                .get(&cid)
-                .cloned()
-                .or_else(|| load_resume_store(&ctx.cwd, &agent.agent_name).remove(&cid))
-        });
-
-    let resp = match resume_candidate {
-        // Every failure falls through to `session/new`: a session that cannot be
-        // reopened is a cold start, never a failed turn.
-        Some(previous) => match agent
-            .acp
-            .session_load(&previous, &ctx.cwd, mcp_servers.clone())
-            .await
-        {
-            Ok(raw) => {
-                tracing::info!(
-                    target: "pool::session",
-                    session_id = %previous,
-                    "reopened session; the channel keeps its accumulated context"
-                );
-                SessionNewResponse {
-                    session_id: previous,
-                    raw,
-                }
-            }
-            Err(error) => {
-                tracing::warn!(
-                    target: "pool::session",
-                    session_id = %previous, ?error,
-                    "session/load failed; starting a fresh session instead"
-                );
-                open_new_session(
-                    agent,
-                    ctx,
-                    is_goose,
-                    mcp_servers,
-                    combined_system_prompt.as_deref(),
-                    session_title.as_deref(),
-                )
-                .await?
-            }
-        },
-        None => {
-            open_new_session(
-                agent,
-                ctx,
+    let resp = agent
+        .acp
+        .session_new_full(
+            &ctx.cwd,
+            mcp_servers,
+            session_new_system_prompt(
                 is_goose,
-                mcp_servers,
+                agent.protocol_version,
+                &agent.agent_name,
                 combined_system_prompt.as_deref(),
-                session_title.as_deref(),
-            )
-            .await?
-        }
-    };
-
-    if let Some(cid) = channel.id {
-        agent.state.resumable.insert(cid, resp.session_id.clone());
-        save_resume_entry(&ctx.cwd, &agent.agent_name, cid, &resp.session_id);
-    }
+            ),
+            session_title.as_deref(),
+        )
+        .await?;
 
     if is_goose && agent.goose_system_prompt_supported != Some(false) {
         if let Some(prompt) = combined_system_prompt.as_deref() {
@@ -5316,9 +5113,9 @@ mod tests {
     /// s2harness gets its instructions through `_meta`, on v1, by name (S2).
     ///
     /// The regression this pins: it answers `protocolVersion: 1` truthfully, and
-    /// the version gate then read that as "cannot take a system prompt" while
-    /// ALSO suppressing the user-message fallback -- so the channel's agent
-    /// instructions reached the model through neither path.
+    /// the version gate read that as "cannot take a system prompt" while ALSO
+    /// suppressing the user-message fallback — so the channel's agent instructions
+    /// reached the model through neither path.
     #[test]
     fn s2harness_gets_the_system_prompt_via_meta_on_protocol_v1() {
         assert!(has_system_prompt_support(1, S2HARNESS_NAME, None));
@@ -5326,7 +5123,7 @@ mod tests {
             session_new_system_prompt(false, 1, S2HARNESS_NAME, Some("You are Fuzzy.")),
             Some(SystemPromptTransport::ClaudeMeta("You are Fuzzy."))
         ));
-        // And an unknown harness on v1 is unchanged: no field, so `format_prompt`
+        // An unknown harness on v1 is unchanged: no field, so `format_prompt`
         // still carries the instructions inside the first user message.
         assert!(!has_system_prompt_support(1, "some-other-harness", None));
         assert!(session_new_system_prompt(false, 1, "some-other-harness", Some("x")).is_none());
@@ -7278,64 +7075,6 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
         assert_eq!(s.core_sections.get(&ch_a).unwrap(), "core-a");
         assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
-    }
-
-    // -- S2: recoverable vs deliberate invalidation ------------------------
-    // See S2-CHANGES.md § Session resume. The distinction is the whole change:
-    // upstream has one verb for a crashed process and for `!rotate`, and those
-    // are opposite intents.
-
-    #[test]
-    fn test_invalidate_channel_keeps_a_resume_candidate() {
-        let (mut s, ch_a, _ch_b) = make_state();
-        assert!(s.invalidate_channel(&ch_a));
-        // Live session gone...
-        assert!(!s.sessions.contains_key(&ch_a));
-        // ...but reopenable: this is a process exit or a model switch, which
-        // nobody asked for, so the conversation is still wanted.
-        assert_eq!(s.resumable.get(&ch_a).map(String::as_str), Some("sess-a"));
-    }
-
-    #[test]
-    fn test_forget_channel_discards_the_resume_candidate() {
-        let (mut s, ch_a, ch_b) = make_state();
-        assert!(s.forget_channel(&ch_a));
-        assert!(!s.sessions.contains_key(&ch_a));
-        // Deliberate: an owner `!rotate`, or removal from the channel. Reopening
-        // would defeat the request.
-        assert!(!s.resumable.contains_key(&ch_a));
-        // Its neighbour is untouched either way.
-        assert_eq!(s.sessions.get(&ch_b).map(String::as_str), Some("sess-b"));
-    }
-
-    #[test]
-    fn test_forget_after_invalidate_still_clears_the_candidate() {
-        // The orders a real run produces: a session can be invalidated by a
-        // crash and only later forgotten by an owner command.
-        let (mut s, ch_a, _ch_b) = make_state();
-        s.invalidate_channel(&ch_a);
-        assert!(s.resumable.contains_key(&ch_a));
-        s.forget_channel(&ch_a);
-        assert!(!s.resumable.contains_key(&ch_a));
-    }
-
-    #[test]
-    fn test_invalidate_all_keeps_every_channel_reopenable() {
-        // `invalidate_all` is the agent-exit path -- the case that motivated
-        // this, since a restart otherwise drops every channel to a re-seed.
-        let (mut s, ch_a, ch_b) = make_state();
-        s.invalidate_all();
-        assert!(s.sessions.is_empty());
-        assert_eq!(s.resumable.get(&ch_a).map(String::as_str), Some("sess-a"));
-        assert_eq!(s.resumable.get(&ch_b).map(String::as_str), Some("sess-b"));
-    }
-
-    #[test]
-    fn test_forget_source_channel_matches_forget_channel() {
-        let (mut s, ch_a, _ch_b) = make_state();
-        s.forget(&PromptSource::Channel(ch_a));
-        assert!(!s.sessions.contains_key(&ch_a));
-        assert!(!s.resumable.contains_key(&ch_a));
     }
 
     #[test]

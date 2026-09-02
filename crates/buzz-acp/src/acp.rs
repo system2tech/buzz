@@ -200,12 +200,6 @@ pub struct AcpClient {
     /// a JSON-RPC *success*, not `-32601` — which the main loop would read as
     /// a delivered steer and drop the user's message from the queue.
     steering_supported: bool,
-    /// Whether the agent advertised `agentCapabilities.loadSession` (S2).
-    ///
-    /// Recorded at `initialize` rather than probed: probing costs a failed
-    /// `session/load`, whose fallback is indistinguishable from a resume that
-    /// legitimately found nothing.
-    load_session_supported: bool,
     /// Per-turn channel for receiving goose-native non-cancelling steer
     /// requests from the main loop. Installed by
     /// [`install_steer_rx`](Self::install_steer_rx) at dispatch and
@@ -565,7 +559,6 @@ impl AcpClient {
             observer_context: ObserverContext::default(),
             active_run_id: None,
             steering_supported: false,
-            load_session_supported: false,
             steer_rx: None,
             goose_usage: UsageTracker::default(),
             standard_usage: StandardUsageTracker::default(),
@@ -624,11 +617,6 @@ impl AcpClient {
             .pointer("/_meta/steering/supported")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        // S2: see S2-CHANGES.md § Session resume.
-        self.load_session_supported = result
-            .pointer("/agentCapabilities/loadSession")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
         tracing::debug!(target: "acp::init", "initialize response: {result}");
         Ok(result)
     }
@@ -639,34 +627,6 @@ impl AcpClient {
             "methodId": method_id,
         });
         self.send_request("authenticate", params).await
-    }
-
-    /// Whether the agent can reopen a session by id (S2).
-    pub fn load_session_supported(&self) -> bool {
-        self.load_session_supported
-    }
-
-    /// Send `session/load` to reopen a session the agent issued earlier (S2).
-    ///
-    /// The agent replays the conversation as `session/update` notifications
-    /// before responding, then answers with its history intact, so the turn that
-    /// follows sees the whole thread rather than a re-seeded fragment.
-    ///
-    /// Only meaningful when [`load_session_supported`](Self::load_session_supported).
-    /// Errors are the caller's signal to fall back to `session/new`: a session
-    /// that cannot be reopened is a cold start, not a failed turn.
-    pub async fn session_load(
-        &mut self,
-        session_id: &str,
-        cwd: &str,
-        mcp_servers: Vec<McpServer>,
-    ) -> Result<serde_json::Value, AcpError> {
-        let params = serde_json::json!({
-            "sessionId": session_id,
-            "cwd": cwd,
-            "mcpServers": mcp_servers,
-        });
-        self.send_request("session/load", params).await
     }
 
     /// Send `session/new` and return the full response alongside the session ID.

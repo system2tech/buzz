@@ -18,7 +18,6 @@ changed under a running setup.
 | area | files | kind |
 |---|---|---|
 | onboarding docs | `.github/README.md`, `S2.md` | docs only |
-| session resume | `crates/buzz-acp/src/{acp,pool}.rs` | **behaviour change** |
 | s2harness system prompt | `crates/buzz-acp/src/pool.rs` | **behaviour change** |
 | transcript timestamps | `desktop/src/features/agents/ui/agentSessionTranscript.ts` | **bug fix, upstream's bug** |
 | observer frame size ceiling | `crates/buzz-core/src/observer.rs` | **bug fix, upstream's bug** |
@@ -43,6 +42,7 @@ don't.
 | `SessionState.resumable` + `forget_channel` + the `session/load` attempt | Does upstream call `session/load` (or v2's `session/resume`) itself? | Drop ours entirely. |
 | — | Does Buzz still send `protocolVersion: 2` in its own `initialize` request? | It is a draft it does not implement, and it uses the answer as a feature flag. **Worth reporting to Block** rather than patching here. |
 | — | Does Buzz still put a bare `systemPrompt` at the root of `session/new`? | The spec forbids custom root fields, and the `acp` Python library therefore drops it. `_meta` is the working carrier. **Worth reporting to Block.** |
+| — (reverted) | Does upstream call `session/load` itself, or re-seed from the relay? | If it starts resuming, nothing to do — we no longer fight it. See *Session resume, and why we stopped* below before rebuilding it. |
 | — (reverted) | Does upstream tolerate CONCURRENT sessions on one channel? The divider flood is real and unfixed — 999 dividers in 1999 blocks at two live sessions. | If upstream fixes it, take theirs. Our attempt is reverted because it reordered the transcript; see the warning below before trying again. |
 | `OBSERVER_MAX_PLAINTEXT_LEN = 64_000` | Is it still 65_535? NIP-44 v2 accepts at most 65_408 (`nostr::nips::nip44::v2::MAX_SUPPORTED_PLAINTEXT_SIZE`), so 65_535 aims the trim into a dead zone. | If upstream has lowered it below 65_408, take theirs. If not, this is worth reporting to Block — it silently drops the largest observer frames. |
 | `BUZZ_VITE_PORT` respects an override in `scripts/instance-env.sh` | Does upstream let the dev vite port be pinned, or is it still `export BUZZ_VITE_PORT=$BASE_PORT` unconditionally? | Take theirs. This is a one-line change to a file otherwise identical to upstream and **worth offering to Block** — any team running dev builds against a shared relay hits it. |
@@ -75,72 +75,63 @@ Two more findings for upstream, neither of which we patch:
 
 ---
 
-## Session resume (`crates/buzz-acp`)
+## Session resume, and why we stopped (REVERTED)
 
-### The problem
+**Nothing in the fork does this any more.** `pool.rs` and `acp.rs` are back to
+upstream. The reasoning is kept because it is the most useful thing this file
+records: an argument we lost, and the three bugs we caused by winning it locally.
 
-Buzz keeps one ACP session per channel and reuses it across turns, so an agent
-accumulates the whole working history — measured on one of ours: **466 messages
-over 9.3 hours**, of which 236 were tool calls and 218 their results.
+### What we built, and why it looked right
 
-Every invalidation throws that away. The next turn calls `session/new` and is
-re-seeded from the relay with at most `--context-message-limit` messages
-(default 12). A nine-hour thread becomes twelve messages, and nothing tells the
-human it happened.
+Buzz keeps one ACP session per channel and re-seeds it from the relay after any
+reset — `BUZZ_ACP_CONTEXT_MESSAGE_LIMIT`, default 12, max 100. A long thread
+therefore collapses to 12 messages on every model switch and every agent restart,
+and nothing tells the human. Measured on one of ours: **466 messages over 9.3
+hours**, of which 236 were tool calls.
 
-Invalidation is not rare. `pool.rs` does it on `AgentExited` (5 sites),
-`HardTimeout` (2), agent errors, `SwitchModel`, `Rotate`, and channel removal —
-and `SessionState` is memory-only, so **buzz-acp restarting loses every session
-too**.
+`claude-agent-acp` advertises `loadSession: true` and can restore a full working
+session across a process restart (measured 2026-08-31). Upstream Buzz **never
+calls it** — zero references to `session/load` in the whole crate. That looked like
+a working capability being discarded, so we added the call, plus a
+recoverable-vs-deliberate distinction so a crash kept its session and `!rotate`
+did not.
 
-### Why upstream can leave it
+### Why we reverted it
 
-The relay is upstream's durable store: it re-seeds context from there, which
-works for any adapter and needs no agent-side state. That is a sound choice for
-a client driving Claude Code, goose and codex alike.
+It is not an oversight; it is their architecture. **The relay is the durable store
+and the agent is close to stateless.** That works for every adapter, needs no
+agent-side state, and — the part we missed — the context block *tells the agent how
+to fetch the rest*: `Use \`buzz messages get --channel <UUID>\` for full history if
+truncated`. So 12 messages inline is a working set, not a memory limit. An agent
+that needs more asks for it.
 
-What it misses is that some adapters *can* restore, and losing their history is
-a silent regression rather than a neutral default. Measured 2026-08-31,
-`claude-agent-acp` advertises `loadSession: true` and restores a full working
-session — tool calls included — across a process restart. Buzz never asks.
-(`agent-harness: experiments/harness/2026-08-31-claude-code-acp-resume.md`.)
+Fighting that produced three bugs, all ours:
 
-### The change
+| symptom | cause |
+|---|---|
+| every replayed row stamped with the replay time | replay generates fresh notifications; Buzz stamps `Utc::now()` |
+| activity view minutes behind | hundreds of replayed frames through a publisher paced at 1/sec |
+| standing context delivered twice | the conversation survived a reset Buzz believed was fatal |
 
-**The missing distinction is *why* a session ended.** Upstream has one
-`invalidate_channel`, used identically for a crashed process and for an owner
-typing `!rotate`. Those are opposite intents:
+Reverting made all three stop existing rather than need fixing, and shrank the
+fork's diff by ~400 lines.
 
-- **Recoverable** — the session ended for a reason nobody asked for: the process
-  exited, a turn timed out, the model changed. The conversation is still wanted.
-- **Deliberate** — someone asked for a fresh start: the owner sent `!rotate`, or
-  the agent was removed from the channel (upstream's own comment: *"stale
-  sessions should not be reused"*).
+### What we kept
 
-So `SessionState` gains a second map, and invalidation gains a second verb:
+`s2harness acp` still implements and advertises `session/load`, correctly and with
+tests, in the agent-harness repo. That is spec-required behaviour and an editor
+client may use it. It simply sits unused by Buzz — exactly as `claude-agent-acp`'s
+does. **Our agent now behaves the same as a Claude Code agent, which was the bar.**
 
-```
-sessions:  channel -> live session id          (unchanged)
-resumable: channel -> last session id          (NEW; survives invalidation)
+### If context loss ever hurts in practice
 
-invalidate_channel(cid)   demote sessions[cid] -> resumable[cid]   (recoverable)
-forget_channel(cid)       drop from BOTH maps                      (deliberate)
-```
+Raise `BUZZ_ACP_CONTEXT_MESSAGE_LIMIT` (up to 100), or take it to Block. Do not
+re-litigate their architecture inside the fork; that is what this section is here
+to prevent.
 
-Every existing call site keeps its current meaning by keeping `invalidate_*`.
-Only the two deliberate paths are switched to `forget_*`. That is the whole
-semantic edit; everything else follows from it.
+---
 
-On session creation, if the agent advertised `loadSession` and a resume
-candidate exists, `session/load` is tried first. **Any failure falls through to
-`session/new`** — a session that cannot be reopened is a cold start, never a
-failed turn.
-
-For buzz-acp's own restart the map is also written to disk, keyed by agent name
-under the session `cwd`, because a workspace can be shared and two agents must
-not read each other's sessions.
-
-## Agent instructions for s2harness (`crates/buzz-acp/src/pool.rs`)
+## Agent instructions for s2harness## Agent instructions for s2harness (`crates/buzz-acp/src/pool.rs`)
 
 ### The problem
 
