@@ -24,15 +24,11 @@ path in Part 2.
 - **A model API key.** `DEEPINFRA_API_KEY` works from anywhere. The `lumi-*`
   profiles need a live LUMI allocation and an SSH tunnel, so start with
   DeepInfra.
-- **tmux** — `brew install tmux`. Do not skip this one. It decides which shell
-  backend the agent gets, and the wrong one fails silently: without tmux, any
-  command longer than ~1 KB is cut off mid-line and never runs, so every long
-  reply the agent writes is lost with no error in the channel, in the activity
-  view, or in the logs. Measured on this fork 2026-09-02: **841 attempts over
-  that size, none delivered.** Verify with `tmux -V` before you go on.
+- **tmux** — `brew install tmux`. Required. Without it the agent silently loses
+  every reply over ~1 KB.
 
 Rust, Node, pnpm, `just` and Flutter all come from the repo's pinned toolchain
-via Hermit — tmux above is the one thing that has to be installed globally.
+via Hermit — tmux is the one thing that installs globally.
 
 ---
 
