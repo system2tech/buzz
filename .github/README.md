@@ -50,22 +50,16 @@ export DEEPINFRA_API_KEY=...          # add to your shell profile to persist
 .venv/bin/s2harness profiles          # want `key=set` on at least one line
 ```
 
-Then wire it into Buzz. The script builds Buzz and registers the `s2harness`
-runtime so it appears in the app's harness dropdown:
+Check the `acp` subcommand is there before going further — it is what Buzz drives,
+and a missing one is much easier to diagnose now than from inside the app:
 
 ```bash
-cd ../buzz
-scripts/s2-setup.sh --check           # reports what is present, changes nothing
-scripts/s2-setup.sh                   # builds Buzz, registers the runtime
+.venv/bin/s2harness acp --help        # should print usage, not an error
 ```
 
-`--check` is worth reading before the real run. It tells you whether the harness
-binary exists, whether it speaks `acp`, whether Docker is up, and whether the
-runtime is already registered.
-
-> **If you would rather register the harness by hand**, or the script's location
-> is wrong for your setup, see [Registering the harness
-> manually](#registering-the-harness-manually) below.
+That is the whole of Part 1. Buzz gets built by the command in Part 2, and the
+harness is registered from inside the app — see [Registering the
+harness](#registering-the-harness) once it is running.
 
 ---
 
@@ -121,12 +115,9 @@ Then **add an agent** on the `s2harness` runtime, exactly as in Path A.
 
 ---
 
-## Registering the harness manually
+## Registering the harness
 
-`scripts/s2-setup.sh` writes this for you. Do it by hand if you moved things, or
-if you want a second runtime alongside it.
-
-In the app: **Settings → Harnesses → Add custom harness**, then:
+Once the app is running: **Settings → Harnesses → Add custom harness**, then:
 
 | field | value |
 |---|---|
@@ -146,8 +137,8 @@ known runtime, not just yours.
 The registration is stored per app instance, under
 `~/Library/Application Support/xyz.block.buzz.app.dev.<branch>/custom_harnesses/`.
 The instance is derived from your **checked-out branch**, so a harness registered
-on one branch is invisible on another. That is a real trap; `s2-setup.sh` derives
-the same slug the app does.
+on one branch is invisible on another. If the dropdown loses your harness after a
+`git switch`, that is why — register it again on the branch you are using.
 
 ---
 

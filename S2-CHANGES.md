@@ -18,7 +18,6 @@ changed under a running setup.
 | area | files | kind |
 |---|---|---|
 | onboarding docs | `.github/README.md`, `S2.md` | docs only |
-| local setup | `scripts/s2-setup.sh` | ours, no upstream equivalent |
 | session resume | `crates/buzz-acp/src/{acp,pool}.rs` | **behaviour change** |
 | s2harness system prompt | `crates/buzz-acp/src/pool.rs` | **behaviour change** |
 | transcript timestamps | `desktop/src/features/agents/ui/agentSessionTranscript.ts` | **bug fix, upstream's bug** |
