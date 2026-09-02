@@ -117,30 +117,33 @@ Then **add an agent** on the `s2harness` runtime, exactly as in Path A.
 
 ## Registering the harness
 
-Once the app is running: **Settings → Harnesses → Add custom harness**, then:
+Once the app is running: **Settings → Agents**, then under **Agent runtimes** click
+**Add runtimes** → **Custom harness** in the left panel. Fill in three fields:
 
 | field | value |
 |---|---|
-| id | `s2harness` |
-| label | `s2harness` |
-| command | `<absolute path to>/agent-harness/.venv/bin/s2harness` |
-| args | `acp` |
+| Name | `s2harness` — the **ID** beside it auto-derives, leave it |
+| Command | `<absolute path to>/agent-harness/.venv/bin/s2harness` |
+| Arguments | click **Add argument**, then a single argument: `acp` |
 
-`command` must be the absolute path to the binary inside the virtualenv — not
-`s2harness` on your `PATH`, which will not exist.
+Leave **Env vars**, **Docs URL** and **Install hint** empty. Save.
 
-If the harness shows as **`(not installed)` and greyed out**, the app has a
-cached answer rather than a missing binary: hit **refresh** on that settings
-panel, which runs a live probe. It takes 20–60 seconds because it probes every
-known runtime, not just yours.
+`Command` must be the absolute path to the binary inside the virtualenv — not
+`s2harness` on your `PATH`, which will not exist. And `acp` belongs in
+**Arguments**, not appended to Command: the field is a command, not a shell line,
+so `.../s2harness acp` there is one filename that does not exist.
+
+It should then appear in the **Agent runtimes** list marked **Ready**, alongside
+Claude Code and the others. If it says **`(not installed)`** or stays unready, use
+the **Check again** button at the top right of that section — the status is cached,
+and the button runs a live probe. It takes 20–60 seconds because it re-probes every
+runtime, not just yours.
 
 The registration is stored per app instance, under
-`~/Library/Application Support/xyz.block.buzz.app.dev.<branch>/custom_harnesses/`.
-The instance is derived from your **checked-out branch**, so a harness registered
-on one branch is invisible on another. If the dropdown loses your harness after a
-`git switch`, that is why — register it again on the branch you are using.
-
----
+`~/Library/Application Support/xyz.block.buzz.app.dev.<slug>/custom_harnesses/`.
+The instance is derived from your **checked-out branch**, so a harness registered on
+one branch is invisible on another. If the runtime disappears after a `git switch`,
+that is why — register it again on the branch you are using.
 
 ## Mobile
 
