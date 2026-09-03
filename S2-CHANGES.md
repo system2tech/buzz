@@ -22,6 +22,7 @@ changed under a running setup.
 | transcript timestamps | `desktop/src/features/agents/ui/agentSessionTranscript.ts` | **bug fix, upstream's bug** |
 | observer frame size ceiling | `crates/buzz-core/src/observer.rs` | **bug fix, upstream's bug** |
 | overridable dev vite port | `scripts/instance-env.sh` | **one-line generalisation; offer upstream** |
+| reply-mentions-the-asker | `crates/buzz-acp/src/base_prompt.md` | **behaviour change; workaround for an upstream gap** |
 
 The last three carry merge risk. The rest are additive files upstream does not
 have. The transcript fix is the one to offer upstream first — it is their bug, it
@@ -75,6 +76,54 @@ Two more findings for upstream, neither of which we patch:
 
 ---
 
+
+## Reply-mentions-the-asker (`base_prompt.md`)
+
+One bullet in the agent prompt: **when your message answers what a person asked,
+put their `@Name` in the content and pass `--mention <their hex pubkey>`.**
+
+### Why
+
+The feed behind Activity, mobile unread and push is sourced from `#p` mentions
+**only**. Nothing ever fetches replies to a thread you authored — mobile's own
+Activity provider says it sources "mentions of me … (also yields thread replies,
+which the thread filter classifies from NIP-10 tags)": the thread filter
+*re-labels* mentions it already had, it does not go looking for replies.
+
+So an untagged thread reply reaches the thread and nowhere else. Measured
+2026-09-03 on our relay: **137 messages posted in a day, 3 of them mentioning the
+human who had asked.** Khoi's phone showed nothing newer than 08:56 that morning
+and was **correct** — there was nothing addressed to him. It read as three
+separate faults (no push, dead Activity tab, invisible unread) and was one gap.
+
+The prompt already said *"Only `@mention` when you need their attention"* — a good
+rule that simply never stated that answering a question IS needing it. Agents had
+also independently started dropping `@` after
+[#7054](https://github.com/block/buzz/issues/7054) began destroying messages that
+contained an unresolvable `@token`, which made the silence worse.
+
+Passing `--mention <hex>` is also the defence against #7054: an explicit identity
+makes any unresolved `@Name` text presentation-only instead of fatal. The
+`<context>` block already carries the triggering author's name and hex, so the
+agent needs no lookup.
+
+### Kept honest by a test
+
+`shared_base_prompt_requires_mentioning_the_person_you_answer` pins all three
+phrases. The rule sits one bullet below its apparent opposite, so a merge that
+keeps the general rule and drops the clarification would restore the silence
+without failing anything else.
+
+### The real fix is upstream, and this is not it
+
+The feed should source replies to threads you authored or participated in. The
+desktop already computes exactly that set — `isNotifiedForThread` is
+`followed || participated || authored || mentioned` — and uses it for unread and
+badges while never asking the relay for those replies. Mobile has no equivalent
+at all. When that is fixed, this bullet can go: delete it and the reply traffic
+loses an `@Name` it no longer needs.
+
+---
 ## Session resume, and why we stopped (REVERTED)
 
 **Nothing in the fork does this any more.** `pool.rs` and `acp.rs` are back to

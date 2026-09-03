@@ -4474,6 +4474,27 @@ mod agent_draft_prompt_tests {
         assert!(prompt.contains("Do not ask about runtime, provider, model, credentials"));
     }
 
+    /// S2 (see S2-CHANGES.md): a reply to a person must mention that person.
+    ///
+    /// The feed that drives Activity, mobile unread and push is sourced from
+    /// `#p` mentions only — never from replies to threads you authored. So an
+    /// untagged thread reply reaches the thread and nothing else. Measured
+    /// 2026-09-03 on our relay: 137 messages posted in a day, three of them
+    /// mentioning the human who had asked, and his phone's Activity showed
+    /// nothing newer than that morning.
+    ///
+    /// Pinned because the rule sits one bullet below "Only `@mention` when you
+    /// need their attention", which reads as its opposite. A merge that keeps
+    /// the general rule and drops this clarification restores the silence
+    /// without failing anything else.
+    #[test]
+    fn shared_base_prompt_requires_mentioning_the_person_you_answer() {
+        let prompt = include_str!("base_prompt.md");
+        assert!(prompt.contains("Answering someone IS needing their attention"));
+        assert!(prompt.contains("--mention <their hex pubkey>"));
+        assert!(prompt.contains("Replying in their thread is not enough"));
+    }
+
     #[test]
     fn shared_base_prompt_names_current_context_framing() {
         let prompt = include_str!("base_prompt.md");
