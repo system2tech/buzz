@@ -18,8 +18,9 @@ path in Part 2.
 
 ## Before you start
 
-- **Docker Desktop**, running. Path A's relay, database and object store are
-  containers. Path B needs Docker too, for the build.
+- **Docker Desktop**, running — **Path A only.** Its relay, database and object
+  store are containers. Path B needs no Docker: the build is Cargo and pnpm, and
+  the relay is already running on the team box.
 - **Access to `system2tech/agent-harness`** — it is private.
 - **A model API key.** `DEEPINFRA_API_KEY` works from anywhere. The `lumi-*`
   profiles need a live LUMI allocation and an SSH tunnel, so start with
