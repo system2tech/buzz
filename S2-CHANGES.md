@@ -8,10 +8,15 @@ it describes — a list that drifts is worse than no list, because it is trusted
 `c856be0fb954`; that merge brought 24 commits including one reworking
 `crates/buzz-acp/src/pool.rs` (#6946) and applied cleanly with no conflicts —
 835 crate tests pass on the merged tree.
-**Relay image pinned to the same commit:** `ghcr.io/block/buzz:sha-c856be0`
-(`deploy/compose/.env` on the host). Desktop and relay are built from one commit
-on purpose — a mismatch there cost us an afternoon when upstream's onboarding
-changed under a running setup.
+**Deployed relay, 2026-09-07:** `buzz-manager-sidebar:66c65da05`, built from
+[the compatibility branch](https://github.com/system2tech/buzz/tree/codex/manager-task-relay)
+at [66c65da05](https://github.com/system2tech/buzz/commit/66c65da0581723db8fe926d9364ad708fa7e8a18).
+It adds the manager/task protocol to the previously deployed
+[c856be0fb954](https://github.com/block/buzz/commit/c856be0fb954), retaining that
+release's dependencies and migrations. The image replaces only the relay binary
+inside the exact previous image, `ghcr.io/block/buzz@sha256:47810cc5ba245ce9cdf5987fc463ea261ee3d507377a2208bd22fed429607164`.
+The desktop and reporters use `s2`; their protocol implementation is also on that
+branch. This is an intentional, tested version split, not an upstream release.
 
 ## Inventory
 
@@ -26,7 +31,7 @@ changed under a running setup.
 | observer frame size ceiling | `crates/buzz-core/src/observer.rs` | **bug fix, upstream's bug** |
 | overridable dev vite port | `scripts/instance-env.sh` | **one-line generalisation; offer upstream** |
 | reply-mentions-the-asker | `crates/buzz-acp/src/base_prompt.md` | **behaviour change; workaround for an upstream gap** |
-| manager/task sidebar | `desktop/src/features/sidebar/`, `scripts/agent-workspaces/`, kind 30180 in core/relay/CLI | **desktop and relay feature; additive protocol** |
+| manager/task sidebar | `desktop/src/features/sidebar/`, `scripts/agent-workspaces/`, kind 30180 in core/SDK/relay/CLI, DB activity and search exclusions | **S2 desktop and relay extension; carries merge risk** |
 
 Changes to existing runtime and UI code carry merge risk; the runbooks and
 reporter scripts are additive. The transcript fix is the one to offer upstream
@@ -36,6 +41,13 @@ first — it is their bug, it affects their own adapters, and the change is smal
 
 ## Manager/task sidebar
 
+**Intentional S2 divergence, deployed and accepted 2026-09-07.** The feature is
+in [eb1ad720b](https://github.com/system2tech/buzz/commit/eb1ad720b), with the
+reporter retry correction in
+[2d8a9e17f](https://github.com/system2tech/buzz/commit/2d8a9e17f353fdad7a42b583c522ef2240c26c69).
+Kind 30180 is this fork's extension; do not assume an unmodified Buzz relay
+accepts it or another client renders it.
+
 Each manager home channel is a collapsible parent of its task channels. Managers
 publish explicit ID-based relationships and bounded lifecycle leases through
 kind 30180. The sidebar distinguishes sleeping, starting, failed, and unknown;
@@ -44,6 +56,11 @@ remains visible when the parent is collapsed.
 
 The macOS/Linux reporter reads the existing worker registry and process state.
 Local transition hooks add no network calls to the supervisor's wake loop.
+Successful reports renew three-minute status leases every minute. Unknown means
+status cannot currently be confirmed, including an expired lease; it does not
+mean sleeping or failed. A failed publish waits 60 seconds before retrying that
+channel/identity. This prevents deleted-channel registry entries from exhausting
+relay request limits while healthy task transitions still publish immediately.
 The relay verifies channel membership, manager authority, task creation, and
 the matching parent before accepting a report. Reports must not advance message
 timestamps, appear in search, or trigger workflows.
@@ -52,10 +69,21 @@ See [the protocol, reporter setup, and validation guide](docs/manager-task-sideb
 Deploy relay support before starting reporters. Other clients continue displaying
 ordinary channels; this change does not add mobile rendering.
 
-At upstream merges, check for a native manager/task relationship and durable
-lifecycle surface. Preserve channel access boundaries and unknown-versus-sleeping
-semantics when replacing this extension. The only live control path remains the
-relay; the desktop does not acquire an SSH or process-management connection.
+At upstream merges, check whether kind 30180 has acquired an upstream meaning,
+and whether Buzz provides a native manager/task relationship and lifecycle
+surface. A kind collision needs an explicit migration, not silent reinterpretation
+of stored records. Preserve channel access boundaries, message/search exclusions,
+reconnect recovery, and unknown-versus-sleeping semantics when replacing this
+extension. Recheck reporter hooks if the worker runtime layout changes. The only
+live control path remains the relay; the desktop does not acquire an SSH or
+process-management connection.
+
+Live acceptance covered task creation, accepted parent/status records, intentional
+sleep, wake on a message, and resumption of the same channel/session. The disposable
+test worker was retired and its conversation archived. Local and remote reporters
+renewed status successfully; denied remote records retried after 61.2 seconds.
+Khoi subsequently confirmed the desktop UI works. See the
+[validation evidence and its limits](docs/manager-task-sidebar.md#rollout-validation-2026-09-07).
 
 ---
 
@@ -88,6 +116,7 @@ don't.
 
 | ours | check for upstream | if present |
 |---|---|---|
+| [Manager/task sidebar and kind 30180](#managertask-sidebar) | Native manager/task grouping, durable lifecycle reporting, or another use of kind 30180? | Prefer the native feature once existing relationships/status semantics can migrate. Resolve any kind collision before merging; retain authority, unread/activity, search, reconnect, and sleep/wake coverage. |
 | `S2HARNESS_NAME` on the system-prompt branch (`pool.rs`) | Has [ACP RFD #1237](https://github.com/agentclientprotocol/agent-client-protocol/pull/1237) (*Client-Provided System Prompt*) landed, and has Buzz moved from the protocol-version gate to the capability it defines? | Delete `S2HARNESS_NAME` **and** `CLAUDE_AGENT_ACP_NAME` from that branch; advertise the capability from `s2harness` instead. Both names exist only because there is no standard. |
 | `SessionState.resumable` + `forget_channel` + the `session/load` attempt | Does upstream call `session/load` (or v2's `session/resume`) itself? | Drop ours entirely. |
 | — | Does Buzz still send `protocolVersion: 2` in its own `initialize` request? | It is a draft it does not implement, and it uses the answer as a feature flag. **Worth reporting to Block** rather than patching here. |

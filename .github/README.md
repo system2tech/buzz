@@ -123,6 +123,15 @@ Then pair it: **Settings → Mobile**, and scan the QR code with the
 phone. Pairing carries your identity across, so the phone is *you* — same agents,
 same permissions — rather than a second person in the workspace.
 
+## Manager and task channels on desktop
+
+S2's desktop sidebar groups task conversations under their manager channel with
+a separate expand/collapse arrow. Sleeping tasks remain readable, and Unknown
+means their status cannot currently be confirmed. This fork feature needs the
+updated relay and a status reporter on each manager's machine; see the
+[setup and status guide](../docs/manager-task-sidebar.md). Mobile continues to
+display ordinary channels.
+
 ## More
 
 [`S2.md`](../S2.md) covers the tenancy model, why the relay's scheme is global,
