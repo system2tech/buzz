@@ -397,8 +397,59 @@ class ReporterWorkflowTests(TemporaryRoot):
                 with patch.object(reporter, "command", side_effect=[response, completed('{"accepted":true}')]) as run:
                     with contextlib.redirect_stderr(io.StringIO()):
                         self.assertFalse(instance.publish("task-channel", WORKER_KEY, "awake", NOW))
-                    self.assertTrue(instance.publish("task-channel", WORKER_KEY, "awake", NOW + 2))
+                    self.assertFalse(instance.publish("task-channel", WORKER_KEY, "awake", NOW + 2))
+                    self.assertFalse(instance.publish("task-channel", WORKER_KEY, "awake", NOW + 59))
+                    self.assertEqual(run.call_count, 1)
+                    self.assertTrue(instance.publish("task-channel", WORKER_KEY, "awake", NOW + 60))
                     self.assertEqual(run.call_count, 2)
+
+    def test_deleted_channel_is_quiet_during_retry_even_if_process_status_changes(self):
+        instance = reporter.Reporter(self.args)
+        response = completed(returncode=3, stderr=json.dumps({
+            "error": "auth_error", "message": "restricted: not a channel member SECRET",
+        }))
+        with (patch.object(reporter, "command", return_value=response) as run,
+              contextlib.redirect_stderr(io.StringIO()) as output):
+            for second in range(0, 60, 2):
+                state = "awake" if second % 4 else "unknown"
+                self.assertFalse(instance.publish("deleted-channel", WORKER_KEY, state, NOW + second))
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(len(output.getvalue().splitlines()), 1)
+            self.assertIn("category=permission-denied", output.getvalue())
+            self.assertNotIn("SECRET", output.getvalue())
+            self.assertFalse(instance.publish("deleted-channel", WORKER_KEY, "awake", NOW + 60))
+            self.assertEqual(run.call_count, 2)
+
+    def test_failed_task_does_not_delay_healthy_task_or_its_transitions(self):
+        instance = reporter.Reporter(self.args)
+        with (patch.object(reporter, "command", side_effect=[
+                None, completed('{"accepted":true}'), completed('{"accepted":true}'),
+              ]) as run, contextlib.redirect_stderr(io.StringIO())):
+            self.assertFalse(instance.publish("deleted-channel", WORKER_KEY, "awake", NOW))
+            self.assertTrue(instance.publish("healthy-channel", WORKER_KEY, "awake", NOW + 1))
+            self.assertTrue(instance.publish("healthy-channel", WORKER_KEY, "sleeping", NOW + 2))
+            self.assertFalse(instance.publish("deleted-channel", WORKER_KEY, "awake", NOW + 3))
+            self.assertEqual(run.call_count, 3)
+
+    def test_success_after_retry_restores_immediate_transitions(self):
+        instance = reporter.Reporter(self.args)
+        with (patch.object(reporter, "command", side_effect=[
+                None, completed('{"accepted":true}'), completed('{"accepted":true}'),
+              ]) as run, contextlib.redirect_stderr(io.StringIO())):
+            self.assertFalse(instance.publish("task-channel", WORKER_KEY, "awake", NOW))
+            self.assertTrue(instance.publish("task-channel", WORKER_KEY, "awake", NOW + 60))
+            self.assertTrue(instance.publish("task-channel", WORKER_KEY, "sleeping", NOW + 61))
+            self.assertEqual(run.call_count, 3)
+            self.assertEqual(instance.retry_after, {})
+
+    def test_failure_categories_accept_only_safe_structured_error_information(self):
+        cases = [(None, "unavailable"), ("bad-json", "rejected"), ("[]", "rejected"),
+                 ('{"message":"invalid: workspace channel not found SECRET"}', "channel-unavailable"),
+                 ('{"message":"permission denied SECRET"}', "permission-denied")]
+        for error, expected in cases:
+            with self.subTest(error=error):
+                result = None if error is None else completed(returncode=2, stderr=error)
+                self.assertEqual(reporter.publish_failure_category(result), expected)
 
     def test_success_is_throttled_until_renewal_but_state_change_is_immediate(self):
         instance = reporter.Reporter(self.args)
@@ -423,7 +474,7 @@ class ReporterWorkflowTests(TemporaryRoot):
         self.worker()
         instance = reporter.Reporter(self.args)
         with (
-            patch.object(reporter.time, "time", side_effect=[NOW, NOW + 2]),
+            patch.object(reporter.time, "time", side_effect=[NOW, NOW + 2, NOW + 60]),
             patch.object(reporter, "manager_state", return_value="awake"),
             patch.object(reporter, "process_state", return_value=("stopped", 0)),
             patch.object(reporter, "command", side_effect=[
@@ -434,6 +485,8 @@ class ReporterWorkflowTests(TemporaryRoot):
         ):
             instance.tick()
             self.assertEqual(run.call_count, 1, "A refused root must block child publishes")
+            instance.tick()
+            self.assertEqual(run.call_count, 1, "Root cooldown must also block child publishes")
             instance.tick()
             channels = [call.args[0][call.args[0].index("--channel") + 1] for call in run.call_args_list]
             self.assertEqual(channels, ["manager-channel", "manager-channel", "task-channel"])

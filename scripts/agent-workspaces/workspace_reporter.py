@@ -21,6 +21,7 @@ import time
 
 SLUG = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\Z")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+PUBLISH_RETRY_SECONDS = 60
 
 
 def read_text(path):
@@ -78,6 +79,25 @@ def command(args, timeout=10):
         return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
+
+
+def publish_failure_category(result):
+    """Classify CLI failures without reflecting credentials or server text."""
+    if result is None:
+        return "unavailable"
+    try:
+        error = json.loads(result.stderr)
+    except (ValueError, TypeError):
+        return "rejected"
+    if not isinstance(error, dict):
+        return "rejected"
+    message = str(error.get("message", "")).lower()
+    if "channel not found" in message or "channel has been deleted" in message:
+        return "channel-unavailable"
+    if error.get("error") == "auth_error" or any(
+            term in message for term in ("permission denied", "not a channel member")):
+        return "permission-denied"
+    return "rejected"
 
 
 def process_state(slug, platform, run=command):
@@ -235,6 +255,7 @@ class Reporter:
         self.args = args
         self.root = Path(args.root).resolve()
         self.previous = {}
+        self.retry_after = {}
         cached = read_json(self.root / ".workspace-readiness.json")
         self.ready = cached if isinstance(cached, dict) else {}
         self.last_manager_probe = 0
@@ -243,6 +264,8 @@ class Reporter:
 
     def publish(self, channel, pubkey, state, now):
         key = (channel, pubkey)
+        if now < self.retry_after.get(key, 0):
+            return False
         old_state, last_sent = self.previous.get(key, (None, 0))
         if old_state == state and now - last_sent < 60:
             return True
@@ -255,15 +278,21 @@ class Reporter:
         else:
             r = command(args, timeout=15)
             if r is None or r.returncode:
-                print(f"workspace publish failed: channel={channel}", file=sys.stderr)
+                self.retry_after[key] = now + PUBLISH_RETRY_SECONDS
+                category = publish_failure_category(r)
+                print(f"workspace publish failed: channel={channel} category={category} "
+                      f"retry_seconds={PUBLISH_RETRY_SECONDS}", file=sys.stderr)
                 return False
             try:
                 accepted = json.loads(r.stdout).get("accepted") is True
             except (ValueError, AttributeError):
                 accepted = False
             if not accepted:
-                print(f"workspace publish refused: channel={channel}", file=sys.stderr)
+                self.retry_after[key] = now + PUBLISH_RETRY_SECONDS
+                print(f"workspace publish refused: channel={channel} "
+                      f"retry_seconds={PUBLISH_RETRY_SECONDS}", file=sys.stderr)
                 return False
+        self.retry_after.pop(key, None)
         self.previous[key] = state, now
         return True
 
