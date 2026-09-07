@@ -1,5 +1,8 @@
 // biome-ignore format: keep compact to stay within file size limit
 import * as React from "react";
+import { useAgentWorkspaces } from "../lib/useAgentWorkspaces";
+import { useSidebarChannelBuckets } from "../lib/sidebarChannelBuckets";
+import { AgentWorkspaceSection } from "./AgentWorkspaceSection";
 import { FeatureGate } from "@/shared/features";
 import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
 
@@ -63,7 +66,7 @@ import { useDeferredModalOpen } from "@/shared/ui/deferredModalOpen";
 import { SidebarUpdateCard } from "@/features/settings/SidebarUpdateCard";
 import { useUpdaterContext } from "@/features/settings/hooks/UpdaterProvider";
 import { shouldShowSidebarUpdateCard } from "@/features/settings/sidebarUpdateCardVisibility";
-import type { Channel, ChannelVisibility } from "@/shared/api/types";
+import type { ChannelVisibility } from "@/shared/api/types";
 import {
   Sidebar,
   SidebarContent,
@@ -293,42 +296,20 @@ export function AppSidebar({
     [channels],
   );
 
-  const sectionBuckets = React.useMemo(() => {
-    const bySection: Record<string, Channel[]> = {};
-    const unassigned: Channel[] = [];
-    const sectionIds = new Set(channelSections.map((s) => s.id));
-
-    for (const channel of streamChannels) {
-      if (starredChannelIds?.has(channel.id)) continue;
-      const sectionId = channelAssignments[channel.id];
-      if (sectionId && sectionIds.has(sectionId)) {
-        if (!bySection[sectionId]) {
-          bySection[sectionId] = [];
-        }
-        bySection[sectionId].push(channel);
-      } else {
-        unassigned.push(channel);
-      }
-    }
-    // Apply each grouping's own sort preference; section membership itself
-    // is untouched.
-    for (const sectionId of Object.keys(bySection)) {
-      bySection[sectionId] = sortChannelsForSidebar(
-        bySection[sectionId],
-        sortModeFor(sectionSortGroupKey(sectionId)),
-      );
-    }
-    return {
-      bySection,
-      unassigned: sortChannelsForSidebar(unassigned, sortModeFor("channels")),
-    };
-  }, [
+  const agentWorkspaces = useAgentWorkspaces(
+    channels,
+    currentPubkey,
+    activeCommunity?.relayUrl,
+    !isLoading,
+  );
+  const sectionBuckets = useSidebarChannelBuckets(
     streamChannels,
     channelSections,
     channelAssignments,
     starredChannelIds,
+    agentWorkspaces.groupedChannelIds,
     sortModeFor,
-  ]);
+  );
 
   const starredChannels = React.useMemo(() => {
     if (!starredChannelIds || starredChannelIds.size === 0) return [];
@@ -606,6 +587,28 @@ export function AppSidebar({
                       onLeaveChannel={requestLeaveChannel}
                     />
                   ) : null}
+                  <AgentWorkspaceSection
+                    groups={agentWorkspaces.groups}
+                    connected={agentWorkspaces.connected}
+                    relayUrl={activeCommunity?.relayUrl}
+                    currentPubkey={currentPubkey}
+                    isActiveChannel={selectedView === "channel"}
+                    selectedChannelId={selectedChannelId}
+                    activeWorkingByChannelId={activeWorkingByChannelId}
+                    unreadChannelIds={unreadChannelIds}
+                    unreadChannelCounts={unreadChannelCounts}
+                    onSelectChannel={onSelectChannel}
+                    onMarkChannelRead={onMarkChannelRead}
+                    onMarkChannelUnread={onMarkChannelUnread}
+                    mutedChannelIds={mutedChannelIds}
+                    onMuteChannel={onMuteChannel}
+                    onUnmuteChannel={onUnmuteChannel}
+                    starredChannelIds={starredChannelIds}
+                    onStarChannel={onStarChannel}
+                    onUnstarChannel={onUnstarChannel}
+                    onDeleteChannel={requestDeleteChannel}
+                    onLeaveChannel={requestLeaveChannel}
+                  />
                   <SidebarDndContext
                     channels={channels}
                     sections={channelSections}

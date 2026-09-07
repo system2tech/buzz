@@ -1,6 +1,8 @@
 /// NIP-42 authentication handler.
 pub mod admin_action_worker;
 pub mod admin_outbox_worker;
+/// Manager/task workspace publisher authorization.
+pub mod agent_workspace;
 pub mod auth;
 /// Subscription close (CLOSE) handler.
 pub mod close;

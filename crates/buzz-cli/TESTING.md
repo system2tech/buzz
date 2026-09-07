@@ -625,3 +625,34 @@ buzz channels delete --channel "$FORUM_ID" | jq .
 | 60 | `notes ls` | ☐ | Own, --author all, --tag, --limit |
 | 61 | `notes rm` | ☐ | Delete→get 404, double-delete idempotent, missing slug → NotFound |
 | 62 | `users set-status` | ☐ | Text+emoji, text only, emoji-only (`--text ""`), `--clear`, `--clear` + `--text` → exit 1 |
+
+
+### Agent workspace sidebar metadata
+
+Use an isolated test relay. Sign all records with the manager's identity through
+`BUZZ_PRIVATE_KEY`; the manager must own or administer its home channel, create
+its task channels, and add each worker to its task channel before publishing.
+
+```bash
+# Register the root before any tasks. MANAGER_PUBKEY is the signing key's public key.
+buzz agent-workspace publish --channel "$MANAGER_CHANNEL" \
+  --manager-channel "$MANAGER_CHANNEL" --agent-pubkey "$MANAGER_PUBKEY" \
+  --location local --state awake --lease-seconds 180
+
+buzz agent-workspace publish --channel "$TASK_CHANNEL" \
+  --manager-channel "$MANAGER_CHANNEL" --agent-pubkey "$WORKER_PUBKEY" \
+  --location local --state sleeping --lease-seconds 180
+```
+
+Verify both writes return `{event_id, accepted: true, message}` and the desktop
+nests the task beneath its manager. Repeat with `--state awake`, restart the
+client, and verify the latest state remains. Use `--lease-seconds 0` to publish a
+relationship whose state is immediately unknown; the task must remain grouped.
+Leases accept 0–600 seconds; publishers should refresh their ordinary 180-second
+leases every 60 seconds. Do not add an `expiration` tag: relationships are durable.
+
+Negative cases: another manager cannot claim a task it did not create; ordinary
+parent members cannot publish roots; absent workers cannot be registered; a task
+cannot refer to another community's parent; missing/mismatched `d` and `h` tags
+are rejected. Lifecycle metadata must not appear in message search, unread
+indicators, or workflow message triggers.

@@ -31,6 +31,8 @@ import {
 } from "@/shared/ui/sidebar";
 import { ChannelActivityPopover } from "@/features/sidebar/ui/ChannelActivityPopover";
 import { useAppShell } from "@/app/AppShellContext";
+import { AgentWorkspaceBadge } from "./AgentWorkspaceBadge";
+import type { AgentWorkspaceStatus } from "../lib/agentWorkspaces";
 
 const SECTION_LABEL_BUTTON_CLASS =
   "group/section-label flex w-fit max-w-[calc(100%-3rem)] cursor-pointer appearance-none items-center gap-1 text-left transition-colors hover:text-sidebar-foreground focus-visible:text-sidebar-foreground";
@@ -249,6 +251,8 @@ export function ChannelMenuButton({
   dmParticipants,
   presenceStatus,
   onSelectChannel,
+  workspaceStatus,
+  workspaceUnreadTaskCount = 0,
 }: {
   channel: Channel;
   label?: string;
@@ -260,6 +264,8 @@ export function ChannelMenuButton({
   dmParticipants?: SidebarDmParticipant[];
   presenceStatus?: PresenceStatus;
   onSelectChannel: (channelId: string) => void;
+  workspaceStatus?: AgentWorkspaceStatus;
+  workspaceUnreadTaskCount?: number;
 }) {
   const resolvedLabel = label ?? channel.name;
   const ephemeralDisplay = getEphemeralChannelDisplay(channel);
@@ -288,12 +294,22 @@ export function ChannelMenuButton({
     !showsUnreadCount &&
     !hasThreadUnread;
   const inactiveContentOpacity = cn(
-    !isActive && !hasTopLevelUnread && !isMuted && "opacity-80",
+    !isActive &&
+      !hasTopLevelUnread &&
+      !isMuted &&
+      workspaceStatus !== "sleeping" &&
+      "opacity-80",
     !isActive &&
       isMuted &&
       !hasTopLevelUnread &&
       !hasThreadUnread &&
       "sidebar-muted-content opacity-50 dark:opacity-45",
+    workspaceStatus === "sleeping" &&
+      !isActive &&
+      !hasUnread &&
+      !hasTopLevelUnread &&
+      !hasThreadUnread &&
+      "text-sidebar-foreground/75",
   );
 
   const button = (
@@ -340,6 +356,24 @@ export function ChannelMenuButton({
           isActive={isActive}
           summary={activeWorking}
         />
+      ) : null}
+      {workspaceStatus ? (
+        <AgentWorkspaceBadge
+          status={workspaceStatus}
+          channelId={channel.id}
+          isActive={isActive}
+        />
+      ) : null}
+      {workspaceUnreadTaskCount > 0 ? (
+        <span
+          className="h-2 w-2 shrink-0 rounded-full bg-primary"
+          data-testid={`manager-unread-${channel.id}`}
+          title={`${workspaceUnreadTaskCount} task channels have unread messages`}
+        >
+          <span className="sr-only">
+            {workspaceUnreadTaskCount} task channels have unread messages
+          </span>
+        </span>
       ) : null}
       {isMuted ? (
         <BellOff

@@ -529,6 +529,7 @@ async fn dispatch_persistent_event_inner(
         && !buzz_core::kind::is_command_kind(kind_u32)
         && !is_relay_workflow_msg
         && kind_u32 != KIND_GIFT_WRAP
+        && kind_u32 != buzz_core::kind::KIND_AGENT_WORKSPACE
     {
         let workflow_engine = Arc::clone(&state.workflow_engine);
         let workflow_event = stored_event.clone();

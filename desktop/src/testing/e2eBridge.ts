@@ -1,3 +1,8 @@
+import {
+  filterMockAgentWorkspaceEvents,
+  mockSubscriptionMatchesChannel,
+  type MockFilter,
+} from "./mockRelayFilters";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { emit, listen } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
@@ -1044,26 +1049,12 @@ const GLOBAL_MOCK_SUBSCRIPTION = "*";
 
 type MockSubscription = {
   channelId: string;
+  channelIds?: string[];
   kinds: number[] | null;
   /** `#p` values from the REQ filters, if any — lets specs assert an
    *  owner-scoped live subscription (e.g. the observer-archive `24200`
    *  reconciliation gate) independently of channel-scoped ones. */
   ownerPubkeys: string[];
-};
-
-type MockFilter = {
-  "#a"?: string[];
-  "#buzz-channel"?: string[];
-  "#d"?: string[];
-  "#e"?: string[];
-  "#h"?: string[];
-  "#p"?: string[];
-  authors?: string[];
-  ids?: string[];
-  kinds?: number[];
-  limit?: number;
-  since?: number;
-  until?: number;
 };
 
 type MockSocket = {
@@ -4684,8 +4675,7 @@ function emitMockLiveEvent(channelId: string, event: RelayEvent) {
   for (const socket of mockSockets.values()) {
     for (const [subId, subscription] of socket.subscriptions) {
       if (
-        (subscription.channelId === channelId ||
-          subscription.channelId === GLOBAL_MOCK_SUBSCRIPTION) &&
+        mockSubscriptionMatchesChannel(subscription, channelId) &&
         (!subscription.kinds || subscription.kinds.includes(event.kind))
       ) {
         sendWsText(socket.handler, ["EVENT", subId, event]);
@@ -4728,8 +4718,7 @@ function hasMockLiveSubscription(channelId: string, kind?: number) {
   for (const socket of mockSockets.values()) {
     for (const subscription of socket.subscriptions.values()) {
       if (
-        (subscription.channelId === channelId ||
-          subscription.channelId === GLOBAL_MOCK_SUBSCRIPTION) &&
+        mockSubscriptionMatchesChannel(subscription, channelId) &&
         (kind === undefined ||
           !subscription.kinds ||
           subscription.kinds.includes(kind))
@@ -10370,8 +10359,7 @@ function sendToMockSocket(args: {
       const kinds = new Set<number>();
       const ownerPubkeys = new Set<string>();
       for (const f of filters) {
-        const cid = f["#h"]?.[0];
-        if (cid) channelIds.add(cid);
+        for (const cid of f["#h"] ?? []) channelIds.add(cid);
         for (const kind of f.kinds ?? []) {
           kinds.add(kind);
         }
@@ -10395,6 +10383,7 @@ function sendToMockSocket(args: {
       }
       socket.subscriptions.set(subId, {
         channelId: onlyChannelId ?? GLOBAL_MOCK_SUBSCRIPTION,
+        channelIds: channelIds.size > 1 ? [...channelIds] : undefined,
         kinds: kinds.size > 0 ? [...kinds] : null,
         ownerPubkeys: [...ownerPubkeys],
       });
@@ -10511,6 +10500,16 @@ function sendToMockSocket(args: {
       return;
     }
 
+    const workspaceEvents = filterMockAgentWorkspaceEvents(
+      filter,
+      getMockMessageStore,
+    );
+    if (workspaceEvents) {
+      for (const event of workspaceEvents)
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
     const channelId = filter["#h"]?.[0];
     if (channelId && subId.startsWith("history-")) {
       const closeReason = mockChannelHistoryCloses.shift();

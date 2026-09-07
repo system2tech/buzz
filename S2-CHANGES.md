@@ -26,10 +26,36 @@ changed under a running setup.
 | observer frame size ceiling | `crates/buzz-core/src/observer.rs` | **bug fix, upstream's bug** |
 | overridable dev vite port | `scripts/instance-env.sh` | **one-line generalisation; offer upstream** |
 | reply-mentions-the-asker | `crates/buzz-acp/src/base_prompt.md` | **behaviour change; workaround for an upstream gap** |
+| manager/task sidebar | `desktop/src/features/sidebar/`, `scripts/agent-workspaces/`, kind 30180 in core/relay/CLI | **desktop and relay feature; additive protocol** |
 
-The last three carry merge risk. The rest are additive files upstream does not
-have. The transcript fix is the one to offer upstream first — it is their bug, it
-affects their own adapters, and the change is three lines.
+Changes to existing runtime and UI code carry merge risk; the runbooks and
+reporter scripts are additive. The transcript fix is the one to offer upstream
+first — it is their bug, it affects their own adapters, and the change is small.
+
+---
+
+## Manager/task sidebar
+
+Each manager home channel is a collapsible parent of its task channels. Managers
+publish explicit ID-based relationships and bounded lifecycle leases through
+kind 30180. The sidebar distinguishes sleeping, starting, failed, and unknown;
+expiry affects status while preserving the relationship. Unread task activity
+remains visible when the parent is collapsed.
+
+The macOS/Linux reporter reads the existing worker registry and process state.
+Local transition hooks add no network calls to the supervisor's wake loop.
+The relay verifies channel membership, manager authority, task creation, and
+the matching parent before accepting a report. Reports must not advance message
+timestamps, appear in search, or trigger workflows.
+
+See [the protocol, reporter setup, and validation guide](docs/manager-task-sidebar.md).
+Deploy relay support before starting reporters. Other clients continue displaying
+ordinary channels; this change does not add mobile rendering.
+
+At upstream merges, check for a native manager/task relationship and durable
+lifecycle surface. Preserve channel access boundaries and unknown-versus-sleeping
+semantics when replacing this extension. The only live control path remains the
+relay; the desktop does not acquire an SSH or process-management connection.
 
 ---
 

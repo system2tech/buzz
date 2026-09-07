@@ -37,11 +37,8 @@ export type TranscriptState = {
   activeMessageKey: Map<string, string>;
   sealedKeys: Set<string>;
   triggeringEventIdsByTurn: Map<string, string[]>;
-  /**
-   * Maps JSON-RPC request id → { itemId, optionNames }.
-   * Populated when a `session/request_permission` request is ingested so the
-   * matching response (which carries the same JSON-RPC id, no `method`) can
-   * correlate and append the outcome to the lifecycle item.
+  /** Maps JSON-RPC request IDs to their lifecycle item and permission choices.
+   * Requests populate this map; responses (same ID, no method) update the item.
    */
   pendingPermissions: Map<
     string,
