@@ -949,7 +949,7 @@ pub async fn soft_delete_event_and_update_thread(
     Ok(deleted)
 }
 
-/// Returns the `created_at` timestamp of the most recent non-deleted event in a channel.
+/// Returns the latest non-deleted channel activity, excluding workspace lifecycle leases.
 pub async fn get_last_message_at(
     pool: &PgPool,
     community_id: CommunityId,
@@ -957,7 +957,7 @@ pub async fn get_last_message_at(
 ) -> Result<Option<DateTime<Utc>>> {
     let row = sqlx::query(
         "SELECT created_at FROM events \
-         WHERE community_id = $1 AND channel_id = $2 AND deleted_at IS NULL \
+         WHERE community_id = $1 AND channel_id = $2 AND deleted_at IS NULL AND kind != 30180 \
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(community_id.as_uuid())
@@ -989,7 +989,7 @@ pub async fn get_last_message_at_bulk(
          WHERE community_id = ",
     );
     qb.push_bind(community_id.as_uuid());
-    qb.push(" AND deleted_at IS NULL AND channel_id IN (");
+    qb.push(" AND deleted_at IS NULL AND kind != 30180 AND channel_id IN (");
     let mut sep = qb.separated(", ");
     for id in channel_ids {
         sep.push_bind(*id);

@@ -251,6 +251,11 @@ pub async fn search(pool: &PgPool, query: &SearchQuery) -> Result<SearchResult, 
     qb.push(" AS query) AS search_query WHERE community_id = ");
     qb.push_bind(*query.community.as_uuid());
     qb.push(" AND deleted_at IS NULL AND search_tsv @@ search_query.query");
+    // Lifecycle leases are sidebar state, not searchable conversation content.
+    // Keep the query guard even on installations whose older generated FTS
+    // column still indexes arbitrary event kinds.
+    qb.push(" AND kind != ");
+    qb.push_bind(buzz_core::kind::KIND_AGENT_WORKSPACE as i32);
 
     // Channel scope — see `ChannelScope` doc for the four-case mapping. The
     // emitted SQL fragments are identical to the legacy 2x2 tuple for the

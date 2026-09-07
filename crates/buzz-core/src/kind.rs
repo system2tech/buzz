@@ -117,6 +117,11 @@ pub const KIND_PUSH_LEASE: u32 = 30350;
 /// plus exact public projection bindings. See `docs/nips/NIP-PMA.md`.
 pub const KIND_PRIVATE_MANAGED_AGENT: u32 = 30179;
 
+/// Manager-authored channel workspace relationship and bounded lifecycle lease.
+/// NIP-33 coordinate is `(author, 30180, channel UUID)`; `h` is that same channel.
+/// The relationship persists after the lifecycle lease expires.
+pub const KIND_AGENT_WORKSPACE: u32 = 30180;
+
 /// Kinds whose stored events are readable only by their author.
 ///
 /// The relay must never reveal the existence, count, tags, content, schedule,
@@ -651,6 +656,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_FILE_METADATA,
     KIND_AGENT_PROFILE,
     KIND_AGENT_ENGRAM,
+    KIND_AGENT_WORKSPACE,
     KIND_EVENT_REMINDER,
     KIND_PERSONA,
     KIND_TEAM,
@@ -857,6 +863,7 @@ const _: () = assert!(is_parameterized_replaceable(KIND_PERSONA)); // 30175 ∈ 
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 30177 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM_CATALOG)); // 30178 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_AGENT_WORKSPACE));
 const _: () = assert!(is_parameterized_replaceable(KIND_PRIVATE_MANAGED_AGENT)); // 30179 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999

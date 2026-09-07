@@ -1,3 +1,5 @@
+/// Manager/task workspace publisher authorization.
+pub mod agent_workspace;
 /// NIP-42 authentication handler.
 pub mod auth;
 /// Subscription close (CLOSE) handler.

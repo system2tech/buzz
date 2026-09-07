@@ -12,6 +12,10 @@
 //! The caller signs with their own keys: `builder.sign_with_keys(&keys)?`.
 //! No keys are held here. No network calls are made.
 
+/// Manager/task workspace event builder.
+pub mod agent_workspace;
+pub use agent_workspace::build_agent_workspace;
+
 pub mod broker;
 pub mod builders;
 pub mod mentions;
