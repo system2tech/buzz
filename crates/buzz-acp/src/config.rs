@@ -367,6 +367,16 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_NO_IGNORE_SELF")]
     pub no_ignore_self: bool,
 
+    /// Where to keep `channel_id -> session_id` so a restarted process resumes its
+    /// conversations instead of starting fresh ones.
+    ///
+    /// Unset means no resume: every start creates new sessions and re-seeds them from
+    /// the channel, which is the behaviour this harness has always had. Set it and a
+    /// worker that is stopped when idle and started when its channel speaks continues
+    /// the same session — carrying what the agent did, not only what it said.
+    #[arg(long, env = "BUZZ_ACP_SESSION_MAP")]
+    pub session_map: Option<PathBuf>,
+
     /// Maximum number of context messages to include for thread replies and DMs.
     /// Set to 0 to disable automatic context fetching. Max 100.
     #[arg(long, env = "BUZZ_ACP_CONTEXT_MESSAGE_LIMIT", default_value_t = 12,
@@ -542,6 +552,7 @@ pub struct Config {
     pub channels_override: Option<Vec<String>>,
     pub no_mention_filter: bool,
     pub config_path: PathBuf,
+    pub session_map: Option<PathBuf>,
     pub context_message_limit: u32,
     /// Maximum turns per session before proactive rotation. 0 = disabled.
     pub max_turns_per_session: u32,
@@ -1119,6 +1130,7 @@ impl Config {
             channels_override: args.channels,
             no_mention_filter: args.no_mention_filter,
             config_path: args.config,
+            session_map: args.session_map,
             context_message_limit: args.context_message_limit,
             max_turns_per_session: args.max_turns_per_session,
             presence_enabled: !args.no_presence,
@@ -1473,6 +1485,7 @@ mod tests {
     /// Build a minimal Config for testing without CLI parsing.
     fn test_config(mode: SubscribeMode) -> Config {
         Config {
+            session_map: None,
             keys: nostr::Keys::generate(),
             relay_url: "ws://localhost:3000".into(),
             agent_command: "goose".into(),

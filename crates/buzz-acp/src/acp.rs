@@ -200,6 +200,8 @@ pub struct AcpClient {
     /// a JSON-RPC *success*, not `-32601` — which the main loop would read as
     /// a delivered steer and drop the user's message from the queue.
     steering_supported: bool,
+    /// Whether the adapter advertised `agentCapabilities.loadSession` at initialize.
+    load_session_supported: bool,
     /// Per-turn channel for receiving goose-native non-cancelling steer
     /// requests from the main loop. Installed by
     /// [`install_steer_rx`](Self::install_steer_rx) at dispatch and
@@ -559,6 +561,7 @@ impl AcpClient {
             observer_context: ObserverContext::default(),
             active_run_id: None,
             steering_supported: false,
+            load_session_supported: false,
             steer_rx: None,
             goose_usage: UsageTracker::default(),
             standard_usage: StandardUsageTracker::default(),
@@ -617,8 +620,21 @@ impl AcpClient {
             .pointer("/_meta/steering/supported")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        // Recorded for the same reason as steering: parsed once here so no call site
+        // can forget it. Gates [`session_load`], which is a hard error on adapters
+        // that do not implement it — and an unimplemented extension answering with a
+        // bare success is exactly the trap that makes blind probing unsafe.
+        self.load_session_supported = result
+            .pointer("/agentCapabilities/loadSession")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         tracing::debug!(target: "acp::init", "initialize response: {result}");
         Ok(result)
+    }
+
+    /// Whether the adapter advertised `agentCapabilities.loadSession`.
+    pub fn supports_load_session(&self) -> bool {
+        self.load_session_supported
     }
 
     /// Send the ACP `authenticate` request for an adapter-advertised method.
@@ -683,6 +699,53 @@ impl AcpClient {
             session_id,
             raw: result,
         })
+    }
+
+    /// Send `session/load` to restore an existing session in a fresh agent process.
+    ///
+    /// This is what makes a dormant channel resumable rather than merely re-seedable.
+    /// A re-seeded session gets the channel's recent messages and is a *new*
+    /// conversation that has read a transcript; a loaded session is the same
+    /// conversation, carrying what the agent did as well as what it said — its tool
+    /// history, its working state, what it already ruled out.
+    ///
+    /// The observer is gated for the duration of the call, and that is done **here
+    /// rather than at the call site on purpose**: the agent re-emits the whole session
+    /// as ACP updates before answering, and letting those out as live activity frames
+    /// is what got the previous version of this reverted. A caller that forgot the
+    /// guard would reintroduce that bug silently — the worker would answer correctly
+    /// while the activity panel fell minutes behind. See
+    /// [`crate::observer::ReplayGuard`].
+    ///
+    /// `cwd` must be absolute and should match the session's original working
+    /// directory; `mcp_servers` may be empty.
+    ///
+    /// Errors if the adapter does not implement `session/load`. Gate on
+    /// `agentCapabilities.loadSession` from `initialize` before calling, and fall back
+    /// to `session/new` plus a re-seed — a refused load must not lose the turn.
+    pub async fn session_load(
+        &mut self,
+        session_id: &str,
+        cwd: &str,
+        mcp_servers: Vec<McpServer>,
+    ) -> Result<serde_json::Value, AcpError> {
+        let params = serde_json::json!({
+            "sessionId": session_id,
+            "cwd": cwd,
+            "mcpServers": mcp_servers,
+        });
+        // Taken before the request and held across it. The guard owns its own Arc, so
+        // this borrow of `self.observer` ends with the statement and leaves
+        // `send_request` free to take `&mut self`.
+        let replay_guard = self
+            .observer
+            .as_ref()
+            .map(|observer| observer.begin_replay(session_id));
+        let result = self.send_request("session/load", params).await;
+        drop(replay_guard);
+        let result = result?;
+        tracing::info!(target: "acp::session", "session loaded: {session_id}");
+        Ok(result)
     }
 
     /// Send `session/new` and return only the `sessionId` string.

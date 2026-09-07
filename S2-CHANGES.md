@@ -18,6 +18,9 @@ changed under a running setup.
 | area | files | kind |
 |---|---|---|
 | onboarding docs | `.github/README.md`, `S2.md` | docs only |
+| always-on agents runbook | `docs/always-on-agents.md` | docs only |
+| idle-session resume | `crates/buzz-acp/src/{acp,config,lib,observer,pool}.rs` | **behaviour change; carries merge risk** |
+| relay-agent discovery cadence | `desktop/src/features/agents/hooks.ts` | **one-constant change; offer upstream** |
 | s2harness system prompt | `crates/buzz-acp/src/pool.rs` | **behaviour change** |
 | transcript timestamps | `desktop/src/features/agents/ui/agentSessionTranscript.ts` | **bug fix, upstream's bug** |
 | observer frame size ceiling | `crates/buzz-core/src/observer.rs` | **bug fix, upstream's bug** |
@@ -27,6 +30,26 @@ changed under a running setup.
 The last three carry merge risk. The rest are additive files upstream does not
 have. The transcript fix is the one to offer upstream first — it is their bug, it
 affects their own adapters, and the change is three lines.
+
+---
+
+## Always-on agents (`docs/always-on-agents.md`)
+
+How to run a manager and its workers as **plain relay members**, on your own machine,
+with no desktop app involved and nothing in the Agents tab. Fills the gap upstream names
+in [block/buzz#2859](https://github.com/block/buzz/issues/2859) — *"agents die with the
+laptop"*.
+
+Not to be confused with [`docs/remote-agents.md`](docs/remote-agents.md), which
+specifies the provider protocol for delegating a **desktop-managed** agent to remote
+compute. Different mechanism, opposite direction of control.
+
+Docs only — it describes existing behaviour and adds none. Written from a working
+deployment (2026-09-05 → 09-07), so the value is concentrated in the traps: the relay
+membership check that short-circuits past the owner attestation and silently kills the
+activity panel; the `bot` role that channel ownership quietly overrides; the startup
+watermark that makes a fixed sleep a race; and the macOS Keychain difference that breaks
+an isolated `CLAUDE_CONFIG_DIR`. Each of those cost hours.
 
 ---
 
@@ -124,6 +147,37 @@ at all. When that is fixed, this bullet can go: delete it and the reply traffic
 loses an `@Name` it no longer needs.
 
 ---
+## Session resume, take two — closing an idle worker without losing it
+
+**This is not a re-litigation of the section below.** Read that first; its argument
+still stands. It rejected replacing the relay re-seed with `session/load`. This adds a
+narrower thing: a worker stopped when idle and started when its channel speaks resumes
+**the same** session, so it comes back knowing what it *did* and not only what it said.
+
+`BUZZ_ACP_SESSION_MAP` persists `channel_id -> session_id`; on the next turn for a
+channel with no live session, `try_resume_channel_session` calls `session/load` and
+reports `is_new_session: false`, which is also what stops the standing context being
+delivered twice.
+
+**The bug that got the previous attempt reverted is handled, not avoided.**
+`session/load` re-emits the whole session as ACP updates before it answers, and
+forwarding those to the relay is what left the activity view minutes behind. The
+suppression window needs no wire marker: buzz-acp is the side that *asks* for the
+replay, so the interval between request and response is a replay by construction. See
+`ReplayGuard` in `observer.rs`; the gate lives inside `session_load` so a call site
+cannot forget it.
+
+Verified 2026-09-07 the honest way, after a first test that proved nothing: a worker ran
+a command, was told not to report the output, was killed outright, and after waking
+named the value — which existed only in its transcript and never in the channel. An
+earlier attempt at this test left the command itself in the channel, so the worker could
+re-run it and appear to remember.
+
+Gated on `agentCapabilities.loadSession`, and every failure path falls back to creating
+a session: a refused resume costs a re-seed, never the turn.
+
+---
+
 ## Session resume, and why we stopped (REVERTED)
 
 **Nothing in the fork does this any more.** `pool.rs` and `acp.rs` are back to

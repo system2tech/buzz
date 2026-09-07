@@ -714,6 +714,10 @@ impl ChannelInfoResolver {
 
 pub struct PromptContext {
     pub mcp_servers: Vec<McpServer>,
+    /// Where `channel_id → session_id` is kept so a restarted process can resume
+    /// conversations instead of starting new ones. `None` disables resume entirely
+    /// and restores the pre-existing re-seed behaviour.
+    pub session_map_path: Option<std::path::PathBuf>,
     pub initial_message: Option<String>,
     pub idle_timeout: Duration,
     pub max_turn_duration: Duration,
@@ -1125,6 +1129,108 @@ struct NewSessionChannelContext<'a> {
     name: Option<&'a str>,
     id: Option<Uuid>,
     channel_type: Option<&'a str>,
+}
+
+/// Read the persisted `channel_id → session_id` map, if one is configured.
+///
+/// A plain JSON object on disk. Absent, unreadable, or malformed all mean the same
+/// thing — no resumable session — because every caller's fallback is to create a
+/// fresh one, which is correct behaviour rather than degraded behaviour.
+fn read_session_map(ctx: &PromptContext) -> HashMap<Uuid, String> {
+    let Some(path) = ctx.session_map_path.as_ref() else {
+        return HashMap::new();
+    };
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    serde_json::from_str::<HashMap<Uuid, String>>(&raw).unwrap_or_default()
+}
+
+/// Record `channel_id → session_id` so a later process can resume this conversation.
+///
+/// Best-effort and deliberately silent on failure: losing the map costs a re-seed on
+/// the next wake, which is the pre-existing behaviour, not an outage.
+fn persist_session_id(ctx: &PromptContext, channel_id: Uuid, session_id: &str) {
+    let Some(path) = ctx.session_map_path.as_ref() else {
+        return;
+    };
+    let mut map = read_session_map(ctx);
+    map.insert(channel_id, session_id.to_string());
+    if let Ok(json) = serde_json::to_string(&map) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(error) = std::fs::write(path, json) {
+            tracing::debug!(target: "pool::session", "could not persist session map: {error}");
+        }
+    }
+}
+
+/// Resume the channel's previous ACP session in this (fresh) agent process.
+///
+/// Returns the session id on success, `None` to mean "create a new one instead" —
+/// every failure path is a fallback, never an error, because a refused resume must
+/// cost a re-seed and not the turn.
+///
+/// **Why this exists.** A worker is stopped when idle and started again when its
+/// channel speaks, so the process serving a conversation is routinely not the one
+/// that started it. Without this, every wake begins a new session that re-reads the
+/// channel: it recovers what was *said* and loses what the agent *did* — its tool
+/// history, its working state, what it already ruled out. With it, the human cannot
+/// tell a wake from a pause.
+///
+/// **Why the guard.** `session/load` makes the agent re-emit the entire session as
+/// ACP updates before it answers. Those must not leave this process as live activity
+/// frames — see [`observer::ReplayGuard`], and S2-CHANGES.md § *Session resume, and
+/// why we stopped* for the measured failure when they did.
+///
+/// Returning `false` for `is_new_session` at the call site is the other half of that
+/// revert: the loaded session already carries the standing context, so re-sending it
+/// is the "standing context delivered twice" bug.
+async fn try_resume_channel_session(
+    agent: &mut OwnedAgent,
+    ctx: &PromptContext,
+    channel_id: Uuid,
+) -> Option<String> {
+    if !agent.acp.supports_load_session() {
+        return None;
+    }
+    let session_id = read_session_map(ctx).get(&channel_id)?.clone();
+
+    // No guard here: `session_load` gates the observer itself, so this cannot be
+    // forgotten at a call site.
+    let outcome = agent
+        .acp
+        .session_load(&session_id, &ctx.cwd, ctx.mcp_servers.clone())
+        .await;
+
+    match outcome {
+        Ok(_) => {
+            tracing::info!(
+                target: "pool::session",
+                "resumed session {session_id} for channel {channel_id}"
+            );
+            agent.state.sessions.insert(channel_id, session_id.clone());
+            // The resumed session has already had its standing context; mark it so
+            // the delivery state agrees with `is_new_session: false`.
+            agent.state.deliveries.insert(
+                channel_id,
+                ChannelDeliveryState {
+                    standing_context_sent: true,
+                    ..Default::default()
+                },
+            );
+            agent.acp.notify_session_spawned(&session_id);
+            Some(session_id)
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "pool::session",
+                "could not resume session {session_id} for channel {channel_id}: {error} — creating a new one"
+            );
+            None
+        }
+    }
 }
 
 async fn create_session_and_apply_model(
@@ -2131,6 +2237,8 @@ pub async fn run_prompt_task(
         PromptSource::Channel(cid) => {
             if let Some(sid) = agent.state.sessions.get(cid) {
                 (sid.clone(), false)
+            } else if let Some(resumed) = try_resume_channel_session(&mut agent, &ctx, *cid).await {
+                (resumed, false)
             } else {
                 // The title is channel-qualified (`Agent · #channel`) so one
                 // agent in several channels doesn't produce identical session
@@ -2156,6 +2264,9 @@ pub async fn run_prompt_task(
                             "created session {sid} for channel {cid}"
                         );
                         agent.state.sessions.insert(*cid, sid.clone());
+                        // Written to disk as well as to memory: the process that
+                        // resumes this conversation is routinely not this one.
+                        persist_session_id(&ctx, *cid, &sid);
                         agent
                             .state
                             .deliveries
@@ -8243,6 +8354,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
     ) -> PromptContext {
         use crate::relay::RestClient;
         PromptContext {
+            session_map_path: None,
             mcp_servers: vec![],
             initial_message: None,
             idle_timeout: Duration::from_secs(60),

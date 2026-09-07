@@ -2195,6 +2195,7 @@ async fn tokio_main() -> Result<()> {
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
         initial_message: config.initial_message.clone(),
+        session_map_path: config.session_map.clone(),
         idle_timeout: Duration::from_secs(config.idle_timeout_secs),
         max_turn_duration: Duration::from_secs(config.max_turn_duration_secs),
         turn_liveness_interval: Duration::from_secs(config.turn_liveness_secs),
@@ -6812,6 +6813,7 @@ mod build_mcp_servers_tests {
 
     fn test_config() -> Config {
         Config {
+            session_map: None,
             keys: nostr::Keys::generate(),
             relay_url: "ws://localhost:3000".into(),
             agent_command: "goose".into(),
@@ -7033,6 +7035,7 @@ mod error_outcome_emission_tests {
 
     fn test_config() -> Config {
         Config {
+            session_map: None,
             keys: nostr::Keys::generate(),
             relay_url: "ws://localhost:3000".into(),
             // `true` exits cleanly, so the async respawn fails fast and

@@ -107,6 +107,26 @@ export type {
 export const AGENTS_FOCUS_STALE_TIME_MS = 5 * 60_000;
 
 /**
+ * How quickly a newly created relay agent becomes visible to this client.
+ *
+ * This is the delay before a just-spawned agent's live activity appears, and it
+ * is a hard floor rather than a hint: the app only subscribes to observer frames
+ * for agents already in the relay-agent list, frames are never stored, and the
+ * list refreshes on nothing but this timer (`refetchOnWindowFocus` is off, so
+ * clicking around cannot hurry it). At the shared five-minute cadence a worker
+ * spawned by a remote manager broadcasts its whole first task into a room with
+ * nobody listening, and the panel stays empty for work that already happened.
+ *
+ * The cost is real and deliberate: each poll is a membership query plus batched
+ * directory, profile and policy resolutions, so this is ~60x the request rate of
+ * the five-minute default. Two things keep it affordable — polling stops
+ * entirely while the window is backgrounded (`useFocusedRefetchInterval`), and
+ * the queries are bounded by the viewer's own channel memberships rather than
+ * scanning the relay. Raise it if the relay starts feeling this.
+ */
+export const RELAY_AGENTS_DISCOVERY_INTERVAL_MS = 5_000;
+
+/**
  * Matches the query's 30 s poll so a focus-return refetches anything older
  * than one poll tick. This detail-view query mounts only on the agent-detail
  * surface and is not part of the app-wide focus storm.
@@ -355,17 +375,29 @@ export function useManagedAgentPrereqsQuery(
 }
 
 export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
-  const refetchInterval = useFocusedRefetchInterval(AGENTS_FOCUS_STALE_TIME_MS);
+  const refetchInterval = useFocusedRefetchInterval(
+    RELAY_AGENTS_DISCOVERY_INTERVAL_MS,
+  );
   return useQuery({
     queryKey: relayAgentsQueryKey,
     queryFn: listRelayAgents,
     // Relay agent discovery is scoped to the viewer's relay-signed channel
     // memberships, then resolves exact agent/profile/policy coordinates in
     // protocol-sized batches. Polling remains the only refresh path for remote
-    // changes, so keep it relaxed and pause while backgrounded.
+    // changes, and it pauses while backgrounded.
+    //
+    // Deliberately faster than the shared agents cadence: this query alone
+    // decides when a newly spawned agent starts being observed, so its interval
+    // IS the delay before live activity appears. The managed-agent queries keep
+    // the relaxed cadence -- they describe agents this client created itself and
+    // already knows about.
     refetchInterval,
     enabled: options?.enabled,
     ...agentsFocusRefetchPolicy,
+    // After the spread on purpose: the shared policy carries the five-minute
+    // staleTime, which would otherwise leave a remount serving stale data for
+    // minutes and undo the point of the interval above.
+    staleTime: RELAY_AGENTS_DISCOVERY_INTERVAL_MS,
   });
 }
 
