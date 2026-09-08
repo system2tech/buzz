@@ -110,6 +110,39 @@ a message by forgetting to look back.
 > `timeout_ms` defaults to five minutes, and a Monitor that hits it dies silently —
 > which is the exact failure the external watcher exists to prevent.
 
+> **`persistent: true` is necessary, not sufficient.** Measured 2026-09-08: a persistent
+> Monitor was reported stopped mid-session — *"may have been stopped (via the UI, Monitor
+> timeout, or agent teardown — these leave no transcript marker)"* — while the session
+> itself kept running, with the model-id line changing in the same instant. A session
+> boundary can therefore tear down the tail without ending the conversation. Nothing was
+> lost, and the reason is this section's whole point: the watcher was not the session's.
+> Re-arm the tail whenever you are told it stopped, and confirm against the relay rather
+> than assuming the cursor is where you left it.
+
+> **Identity is resolved once, at the worst possible moment.** `whoami()` runs at startup
+> and is cached for the life of the process. A failure there is deliberately non-fatal, so
+> the watcher carries on with "identity unknown" — and never asks again. Startup is exactly
+> when the relay is least likely to answer: after a reboot, or a restart during an outage.
+> The symptom is that the agent wakes on **its own messages**, spending a turn on every
+> reply it sends.
+>
+> It is worse than cosmetic. `refresh_membership` ends `... if me else True`, so with no
+> identity **every visible channel is marked as one you are in**, even where the read
+> succeeded and shows otherwise. Under `--subscribe joined` that is the intended fail-open,
+> noisy rather than lossy, which is the right direction. Under `--subscribe room`, which
+> gates thread replies on that same flag, it silently becomes `--subscribe all` for every
+> thread reply in every visible channel.
+>
+> Measured 2026-09-08 on two machines independently: both managers' watchers had started
+> during a relay outage and were echoing their own posts for hours. A restart re-resolves
+> it; the durable fix is to retry while the identity is unknown. **The fail-open is not the
+> bug — its permanence is.**
+>
+> **Check it after every watcher restart, and look in the right file.** The banner,
+> including this warning, is written with a bare `print`, so it is on **stdout**, which the
+> unit redirects to `inbox.log`. Only the heartbeat and the BLIND/RECOVERED lines go to
+> stderr in `watch.err`. Grepping the wrong file makes a present warning look absent.
+
 ### 1.3 Giving it its instructions — read vs. loaded
 
 The manager needs to know it is a Buzz manager: its channel, how it hears, how it
@@ -139,6 +172,14 @@ reaches it if the human's global file imports that repo by absolute path.
 And regardless of where it lives: **editing the brief does not change a running
 session.** Restart it when you change what the agent is allowed to do.
 
+> **And an instruction you removed is not an instruction reversed.** Measured 2026-09-08:
+> `--flat-replies` (#1) stopped `buzz-acp` from supplying a `--reply-to` anchor, and workers
+> went on threading regardless, because their base prompt has a Threading section telling
+> them to. It took a second change (#2), emitting an explicit *"post top-level, do NOT use
+> `--reply-to`"*, to actually get the behaviour. Withdrawing a nudge leaves the default in
+> place. When changing an agent's behaviour by changing its inputs, name the default that
+> survives your change — if you cannot, you have removed a reason rather than made a change.
+
 ### 1.3 Staying alive
 
 A timer that asks "is my session running?" and starts one if not. Announce restarts in
@@ -149,6 +190,19 @@ nothing was lost, and a mention wakes the human's phone for nothing.
 > is only safe on a machine nobody else uses. On a shared or personal machine, record
 > the id of the session you started and check that one — otherwise the supervisor
 > believes the manager is alive because the human happens to be running something.
+
+> **Do not make the supervisor a `oneshot`.** A `Type=oneshot` service that launches the
+> agent and then exits takes the agent down with it: systemd tears the unit's cgroup down
+> when a completed oneshot's last process exits, so the session dies seconds after being
+> started. The timer fires again, finds no session, starts another, and kills that one too.
+> Measured 2026-09-08: **sixteen restarts in thirty-two minutes**, each announcing itself in
+> the channel, while the human's two questions sat unanswered because nothing stayed alive
+> long enough to read them. The announcements came from the supervisor script rather than
+> from any session, which is what made it look like an agent that kept crashing instead of a
+> supervisor that kept killing.
+>
+> Make it `Type=simple` with `Restart=always`, and let the script hold its own loop with the
+> sleep *inside* it, so the cgroup never empties while the agent is meant to be running.
 
 ---
 
@@ -343,6 +397,10 @@ and is enough for key generation.
 [ ] the brief is AUTO-LOADED (a CLAUDE.md the runtime picks up), not read from the
     boot prompt — and the agent is restarted whenever the brief changes
 [ ] supervisor checks for ITS OWN session id and announces restarts without a mention
+[ ] supervisor is NOT a `oneshot` — it holds its own loop, so exiting does not kill the
+    agent it just started
+[ ] after every watcher restart: identity confirmed in inbox.log (NOT watch.err), because
+    an unresolved identity turns `room` into `all` for thread replies
 [ ] worker spawn: fresh key + attestation per worker, manager creates the channel,
     human as owner, worker as bot, agent-profile record published
 [ ] worker bridge: KINDS=9, CHANNELS scoped, RELAY_OBSERVER with a resolved owner,

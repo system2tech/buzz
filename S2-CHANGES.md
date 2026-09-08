@@ -105,6 +105,24 @@ activity panel; the `bot` role that channel ownership quietly overrides; the sta
 watermark that makes a fixed sleep a race; and the macOS Keychain difference that breaks
 an isolated `CLAUDE_CONFIG_DIR`. Each of those cost hours.
 
+**Extended 2026-09-08** from a second deployment (the Linux agent box), still docs only.
+Four more traps, each measured rather than reasoned: a `Type=oneshot` supervisor that
+kills the session it just started, and does it every timer tick — sixteen restarts in
+thirty-two minutes, with the human's questions unanswered throughout; `whoami()` resolved
+once at startup and cached, so a relay hiccup in that instant leaves the watcher echoing
+its own messages for the life of the process — and, because `refresh_membership` falls
+back to assuming membership, turns the new `--subscribe room` into `--subscribe all` for
+thread replies; `persistent: true` on a Claude Code Monitor not surviving a session
+boundary, which is the failure the external watcher exists to absorb and did; and the
+stdout/stderr split that puts the identity banner in `inbox.log` while the heartbeat goes
+to `watch.err`, so the obvious file to check is the wrong one.
+
+The instruction-force note in Part 1 also gained a counterpart from this fork's own
+`--flat-replies` work: **an instruction you removed is not an instruction reversed.** #1
+stopped supplying the `--reply-to` anchor and workers threaded anyway on their base
+prompt's Threading section; #2 had to say "post top-level" positively before the behaviour
+changed.
+
 ---
 
 ## Upstream watch list
