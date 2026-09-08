@@ -338,3 +338,24 @@ See the [root TESTING.md](../../TESTING.md) for the full integration testing gui
 ## License
 
 Apache-2.0
+
+## Channel member live activity (S2 fork)
+
+Set both `BUZZ_ACP_RELAY_OBSERVER=true` and
+`BUZZ_ACP_OBSERVER_CHANNEL_MEMBERS=true` for a worker to share its channel activity
+with current channel members. The latter defaults to false. This requires the
+matching S2 relay and desktop support for `observer_channel` telemetry.
+
+Each member receives a separately encrypted copy. Ownership and control remain
+separate: sharing does not grant model changes, cancellation, or other owner
+controls. Global events, prompts, configuration, and control results stay private.
+Only channel-scoped turn/session status and agent output, thoughts, tools, and plans
+are shared. Nested batches must have one exact channel throughout.
+
+The publisher refreshes the roster for each source batch; the relay checks current
+membership again when publishing and delivering. Lookups fail closed after two
+seconds or a 1 MiB response. One pending frame and at most 64 additional recipients
+are retained; larger rosters skip sharing wholly with a warning, never an arbitrary
+subset. Source batches retain the one-second cadence, with recipient copies paced
+at a maximum of 20 per second. A five-person channel therefore does not multiply
+the original activity backlog by five. The existing owner stream remains available.

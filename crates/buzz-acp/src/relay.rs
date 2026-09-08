@@ -436,6 +436,40 @@ impl RestClient {
             .map_err(|e| RelayError::Http(e.to_string()))
     }
 
+    /// Query a roster without allowing its response body to exceed a byte budget.
+    /// The caller should also bound the whole request lifetime with a timeout.
+    pub(crate) async fn query_raw_bounded(
+        &self,
+        filters: &[Value],
+        max_bytes: usize,
+    ) -> Result<Value, RelayError> {
+        let body_bytes = serde_json::to_vec(filters)
+            .map_err(|e| RelayError::Http(format!("filter serialize error: {e}")))?;
+        let mut response = self.bridge_post("/query", &body_bytes).await?;
+        if response
+            .content_length()
+            .is_some_and(|len| len > max_bytes as u64)
+        {
+            return Err(RelayError::Http(
+                "query response exceeds byte budget".into(),
+            ));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| RelayError::Http(e.to_string()))?
+        {
+            if chunk.len() > max_bytes.saturating_sub(bytes.len()) {
+                return Err(RelayError::Http(
+                    "query response exceeds byte budget".into(),
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&bytes).map_err(|e| RelayError::Http(e.to_string()))
+    }
+
     /// Query every historical event matching one raw filter across bounded pages.
     ///
     /// Uses the bridge's composite `(until, before_id)` cursor so a full page

@@ -1,5 +1,7 @@
 #![deny(unsafe_code)]
 
+mod channel_observer;
+
 mod acp;
 mod config;
 mod engram_fetch;
@@ -623,8 +625,8 @@ fn spawn_relay_observer_publisher(
     publisher: RelayEventPublisher,
     keys: nostr::Keys,
     agent_pubkey_hex: String,
-    owner_pubkey_hex: String,
     owner_pubkey: PublicKey,
+    channel_rest: Option<relay::RestClient>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         // Subscribe BEFORE snapshotting so an event emitted between the two
@@ -639,8 +641,8 @@ fn spawn_relay_observer_publisher(
             publisher,
             keys,
             agent_pubkey_hex,
-            owner_pubkey_hex,
             owner_pubkey,
+            channel_rest,
         )
         .await;
     })
@@ -652,23 +654,36 @@ async fn run_relay_observer_publisher(
     publisher: RelayEventPublisher,
     keys: nostr::Keys,
     agent_pubkey_hex: String,
-    owner_pubkey_hex: String,
     owner_pubkey: PublicKey,
+    channel_rest: Option<relay::RestClient>,
 ) {
+    let owner_pubkey_hex = owner_pubkey.to_hex();
+    let copy_tick = if channel_rest.is_some() {
+        Duration::from_millis(50)
+    } else {
+        OBSERVER_PUBLISH_TICK
+    };
+    let mut next_frame_at = tokio::time::Instant::now() + OBSERVER_PUBLISH_TICK;
+    let mut channel_members = channel_rest.map(channel_observer::ChannelMembers::new);
+    let mut pending_recipients = Vec::<PublicKey>::new().into_iter();
+    let mut pending_frame: Option<observer::ObserverEvent> = None;
     let mut queue = ObserverPublishQueue::default();
     let max_snapshot_seq = snapshot.iter().map(|event| event.seq).max().unwrap_or(0);
     for event in snapshot {
         queue.ingest(event);
     }
 
-    // Global pacer: AT MOST ONE relay frame per tick, no matter how many
-    // channels are active or how large the backlog is. `interval_at` starts
+    // Global pacer: AT MOST ONE encrypted copy per tick, no matter how many
+    // channels are active or how large the backlog is. New source batches retain
+    // the original one-second cadence; opted-in recipient copies use 50ms ticks
+    // so a five-person team does not multiply the live activity backlog by five.
+    // Only one source frame is retained for fanout. `interval_at` starts
     // the first tick a full period out, so a pre-loaded snapshot (up to the
     // 1,000-event replay buffer on reconnect) cannot burst at t=0 — the old
     // pacer's explicit "no initial burst" property, restored.
     let mut publish_tick = tokio::time::interval_at(
         tokio::time::Instant::now() + OBSERVER_PUBLISH_TICK,
-        OBSERVER_PUBLISH_TICK,
+        copy_tick,
     );
     publish_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut closed = false;
@@ -697,13 +712,31 @@ async fn run_relay_observer_publisher(
                 }
             }
             _ = publish_tick.tick() => {
-                if let Some(frame) = queue.next_frame() {
+                if let (Some(recipient), Some(frame)) = (pending_recipients.next(), pending_frame.as_ref()) {
+                    publish_relay_observer_event(
+                        &publisher, &keys, &agent_pubkey_hex, &recipient.to_hex(),
+                        &recipient, frame.clone(), true,
+                    ).await;
+                } else if tokio::time::Instant::now() >= next_frame_at {
+                    let Some(frame) = queue.next_frame() else {
+                        if closed { break; }
+                        continue;
+                    };
+                    next_frame_at = tokio::time::Instant::now() + OBSERVER_PUBLISH_TICK;
+                    if let (Some(members), Some(shared)) = (channel_members.as_mut(), channel_observer::shareable_frame(&frame)) {
+                        if let Some(channel) = shared.channel_id.as_deref() {
+                            pending_recipients = members.recipients(channel, &agent_pubkey_hex, &owner_pubkey_hex).await.into_iter();
+                            pending_frame = Some(shared);
+                        }
+                    }
                     publish_relay_observer_event(
                         &publisher, &keys, &agent_pubkey_hex,
-                        &owner_pubkey_hex, &owner_pubkey, frame,
+                        &owner_pubkey_hex, &owner_pubkey, frame, false,
                     ).await;
                 }
-                if closed && queue.is_empty() {
+                // A slow roster lookup must not permit catch-up copies back to back.
+                if channel_members.is_some() { publish_tick.reset_after(copy_tick); }
+                if closed && queue.is_empty() && pending_recipients.len() == 0 {
                     break;
                 }
             }
@@ -1045,6 +1078,7 @@ async fn publish_relay_observer_event(
     owner_pubkey_hex: &str,
     owner_pubkey: &PublicKey,
     mut event: observer::ObserverEvent,
+    channel_shared: bool,
 ) {
     // Trim oversized frames to fit the plaintext cap rather than letting
     // encrypt_observer_payload reject and drop them whole (silent telemetry loss).
@@ -1067,6 +1101,18 @@ async fn publish_relay_observer_event(
             tracing::warn!("failed to build relay observer event: {error}");
             return;
         }
+    };
+    let builder = if channel_shared {
+        let Some(channel) = event.channel_id.as_deref() else {
+            return;
+        };
+        let Ok(tag) = nostr::Tag::parse([buzz_core::observer::OBSERVER_CHANNEL_TAG, channel])
+        else {
+            return;
+        };
+        builder.tag(tag)
+    } else {
+        builder
     };
     let signed = match builder.sign_with_keys(keys) {
         Ok(event) => event,
@@ -2151,7 +2197,7 @@ async fn tokio_main() -> Result<()> {
         }
     }
 
-    if let Some((observer, publisher, keys, agent_pubkey, owner_pubkey, owner)) =
+    if let Some((observer, publisher, keys, agent_pubkey, _owner_pubkey, owner)) =
         relay_observer_publisher.take()
     {
         relay_observer_publisher_task = Some(spawn_relay_observer_publisher(
@@ -2159,8 +2205,8 @@ async fn tokio_main() -> Result<()> {
             publisher,
             keys,
             agent_pubkey,
-            owner_pubkey,
             owner,
+            config.observer_channel_members.then(|| relay.rest_client()),
         ));
     }
 
@@ -5810,8 +5856,8 @@ mod observer_snapshot_race_tests {
             publisher,
             agent_keys.clone(),
             agent_keys.public_key().to_hex(),
-            owner_keys.public_key().to_hex(),
             owner_keys.public_key(),
+            None,
         )
         .await;
 
@@ -6534,8 +6580,8 @@ mod observer_publish_cadence_tests {
             publisher,
             agent_keys.clone(),
             agent_keys.public_key().to_hex(),
-            owner_keys.public_key().to_hex(),
             owner_keys.public_key(),
+            None,
         ));
 
         // t=0: nothing may publish, no matter how full the snapshot was.
@@ -6613,8 +6659,8 @@ mod observer_publish_cadence_tests {
             publisher,
             agent_keys.clone(),
             agent_keys.public_key().to_hex(),
-            owner_keys.public_key().to_hex(),
             owner_keys.public_key(),
+            None,
         ));
 
         settle().await;
@@ -6679,8 +6725,8 @@ mod observer_publish_cadence_tests {
             publisher,
             agent_keys.clone(),
             agent_keys.public_key().to_hex(),
-            owner_keys.public_key().to_hex(),
             owner_keys.public_key(),
+            None,
         ));
         settle().await;
 
@@ -6855,6 +6901,7 @@ mod build_mcp_servers_tests {
             persona_env_vars: vec![],
             has_generated_codex_config: false,
             relay_observer: false,
+            observer_channel_members: false,
             exit_after_inactivity_secs: 0,
             lazy_pool: false,
             idle_pool_sleep_secs: 0,
@@ -7081,6 +7128,7 @@ mod error_outcome_emission_tests {
             persona_env_vars: vec![],
             has_generated_codex_config: false,
             relay_observer: false,
+            observer_channel_members: false,
             exit_after_inactivity_secs: 0,
             lazy_pool: false,
             idle_pool_sleep_secs: 0,

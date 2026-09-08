@@ -11,8 +11,8 @@ use buzz_core::kind::{
     KIND_AGENT_OBSERVER_FRAME, KIND_GIFT_WRAP, KIND_PRESENCE_UPDATE,
 };
 use buzz_core::observer::{
-    content_looks_like_nip44, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
-    OBSERVER_FRAME_TELEMETRY,
+    content_looks_like_nip44, observer_channel, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL,
+    OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_core::verification::verify_event;
@@ -129,6 +129,50 @@ pub async fn filter_fanout_by_access(
             state.conn_manager.community_for_conn(*conn_id) == Some(community_id)
         })
         .collect();
+
+    // Channel observation is addressed globally (#p) but must re-check channel
+    // membership at delivery, on every node, after publication as well.
+    let matches = if event_kind_u32(&stored_event.event) == KIND_AGENT_OBSERVER_FRAME {
+        match observer_channel(&stored_event.event) {
+            Err(_) => return Vec::new(),
+            Ok(Some(channel)) => {
+                let recipient = match parse_single_pubkey_tag(&stored_event.event, "p") {
+                    Ok(pk) => pk.to_bytes(),
+                    Err(_) => return Vec::new(),
+                };
+                let agent = stored_event.event.pubkey.to_bytes();
+                let pairs = match state
+                    .db
+                    .membership_pairs(
+                        community_id,
+                        &[channel],
+                        &[agent.to_vec(), recipient.to_vec()],
+                    )
+                    .await
+                {
+                    Ok(pairs) => pairs,
+                    Err(_) => return Vec::new(),
+                };
+                if !pairs.iter().any(|(_, pk)| pk.as_slice() == agent)
+                    || !pairs.iter().any(|(_, pk)| pk.as_slice() == recipient)
+                {
+                    return Vec::new();
+                }
+                matches
+                    .into_iter()
+                    .filter(|(id, _)| {
+                        state
+                            .conn_manager
+                            .pubkey_for_conn(*id)
+                            .is_some_and(|pk| pk.as_slice() == recipient)
+                    })
+                    .collect()
+            }
+            Ok(None) => matches,
+        }
+    } else {
+        matches
+    };
 
     // Author-only kinds (NIP-ER reminders) may only ever be delivered to the
     // event's own author. This gate lives here — the chokepoint shared by the
@@ -917,6 +961,7 @@ struct AgentObserverRoute {
     agent: PublicKey,
     owner: PublicKey,
     direction: AgentObserverDirection,
+    channel: Option<uuid::Uuid>,
 }
 
 /// Check + bump the per-agent observer telemetry limit (100/sec window).
@@ -1023,7 +1068,28 @@ async fn handle_agent_observer_event(
         agent_bytes.clone(),
         owner_bytes.clone(),
     );
-    let is_owner = if session_owner_match {
+    let is_owner = if let Some(channel) = route.channel {
+        // Fresh DB membership on BOTH endpoints. Owner caches never authorize
+        // channel copies, and open-channel visibility alone is insufficient.
+        match state
+            .db
+            .membership_pairs(
+                conn.tenant.community(),
+                &[channel],
+                &[agent_bytes.clone(), owner_bytes.clone()],
+            )
+            .await
+        {
+            Ok(pairs) => {
+                pairs.iter().any(|(_, pk)| pk == &agent_bytes)
+                    && pairs.iter().any(|(_, pk)| pk == &owner_bytes)
+            }
+            Err(e) => {
+                warn!(%channel, "observer channel membership check failed: {e}");
+                false
+            }
+        }
+    } else if session_owner_match {
         true
     } else {
         match state.observer_owner_cache.get(&cache_key) {
@@ -1106,6 +1172,7 @@ fn agent_observer_route(event: &Event) -> Result<Option<AgentObserverRoute>, Str
         return Err("invalid: observer content must be NIP-44 encrypted".into());
     }
 
+    let channel = observer_channel(event).map_err(|e| format!("invalid: {e}"))?;
     let recipient = parse_single_pubkey_tag(event, "p")?;
     let agent = parse_single_pubkey_tag(event, OBSERVER_AGENT_TAG)?;
     let frame = single_tag_content(event, OBSERVER_FRAME_TAG)?;
@@ -1129,6 +1196,10 @@ fn agent_observer_route(event: &Event) -> Result<Option<AgentObserverRoute>, Str
         );
     };
 
+    if channel.is_some() && direction != AgentObserverDirection::Telemetry {
+        return Err("invalid: channel observation never grants control".into());
+    }
+
     if frame != expected_frame {
         // Unknown frame value — silently drop without notifying the publisher.
         return Ok(None);
@@ -1138,6 +1209,7 @@ fn agent_observer_route(event: &Event) -> Result<Option<AgentObserverRoute>, Str
         agent,
         owner,
         direction,
+        channel,
     }))
 }
 
@@ -1166,6 +1238,7 @@ fn single_tag_content<'a>(event: &'a Event, tag_name: &str) -> Result<&'a str, S
 
 #[cfg(test)]
 mod tests {
+    include!("event_channel_tests.rs");
     use std::collections::HashMap;
     use std::sync::atomic::AtomicU8;
     use std::sync::Arc;

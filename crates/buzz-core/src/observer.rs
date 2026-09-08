@@ -11,6 +11,8 @@ use zeroize::Zeroize;
 
 /// Tag name that identifies the agent pubkey the observer frame belongs to.
 pub const OBSERVER_AGENT_TAG: &str = "agent";
+/// Channel whose members may read this telemetry; never grants control.
+pub const OBSERVER_CHANNEL_TAG: &str = "observer_channel";
 /// Tag name that identifies the cleartext frame direction.
 pub const OBSERVER_FRAME_TAG: &str = "frame";
 /// Frame value for agent-to-owner observer telemetry.
@@ -70,6 +72,79 @@ pub fn content_looks_like_nip44(content: &str) -> bool {
     (NIP44_MIN_CONTENT_LEN..=NIP44_MAX_CONTENT_LEN).contains(&content.len())
 }
 
+/// Parse the optional channel observation scope, rejecting ambiguous routing.
+pub fn observer_channel(event: &Event) -> Result<Option<uuid::Uuid>, ObserverPayloadError> {
+    let tags: Vec<_> = event
+        .tags
+        .iter()
+        .filter(|tag| tag.kind().to_string() == OBSERVER_CHANNEL_TAG)
+        .collect();
+    if tags.is_empty() {
+        return Ok(None);
+    }
+    if tags.len() != 1 || tags[0].as_slice().len() != 2 {
+        return Err(ObserverPayloadError::InvalidPayload(
+            "ambiguous observer channel".into(),
+        ));
+    }
+    let channel = tags[0]
+        .content()
+        .and_then(|v| v.parse::<uuid::Uuid>().ok())
+        .ok_or_else(|| ObserverPayloadError::InvalidPayload("invalid observer channel".into()))?;
+    let frames: Vec<_> = event
+        .tags
+        .iter()
+        .filter(|tag| tag.kind().to_string() == OBSERVER_FRAME_TAG)
+        .collect();
+    if frames.len() != 1 || frames[0].content() != Some(OBSERVER_FRAME_TELEMETRY) {
+        return Err(ObserverPayloadError::InvalidPayload(
+            "channel scope is telemetry only".into(),
+        ));
+    }
+    Ok(Some(channel))
+}
+
+/// Enforce the encrypted payload's channel boundary, including every batch item.
+/// Unscoped legacy owner frames retain their original payload format.
+fn validate_channel_payload(
+    event: &Event,
+    payload: &serde_json::Value,
+) -> Result<(), ObserverPayloadError> {
+    let Some(channel) = observer_channel(event)? else {
+        return Ok(());
+    };
+    fn matches_channel(value: &serde_json::Value, channel: uuid::Uuid) -> bool {
+        value
+            .get("channelId")
+            .and_then(|v| v.as_str())
+            .and_then(|v| v.parse::<uuid::Uuid>().ok())
+            == Some(channel)
+    }
+    if !matches_channel(payload, channel) {
+        return Err(ObserverPayloadError::InvalidPayload(
+            "observer payload crosses channel scope".into(),
+        ));
+    }
+    if payload.get("kind").and_then(|v| v.as_str()) == Some("batch") {
+        let items = payload
+            .get("payload")
+            .and_then(|v| v.get("events"))
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| ObserverPayloadError::InvalidPayload("invalid observer batch".into()))?;
+        if items.is_empty()
+            || items.iter().any(|v| {
+                !matches_channel(v, channel)
+                    || v.get("kind").and_then(|k| k.as_str()) == Some("batch")
+            })
+        {
+            return Err(ObserverPayloadError::InvalidPayload(
+                "observer batch crosses channel scope".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Serialize and NIP-44 encrypt an observer payload for `recipient`.
 pub fn encrypt_observer_payload<T: Serialize>(
     sender_keys: &Keys,
@@ -107,6 +182,26 @@ pub fn decrypt_observer_payload<T: DeserializeOwned>(
         ));
     }
 
+    if observer_channel(event)?.is_some() {
+        for (name, expected) in [
+            ("p", recipient_keys.public_key()),
+            (OBSERVER_AGENT_TAG, event.pubkey),
+        ] {
+            let tags: Vec<_> = event
+                .tags
+                .iter()
+                .filter(|tag| tag.kind().to_string() == name)
+                .collect();
+            if tags.len() != 1
+                || tags[0].as_slice().len() != 2
+                || tags[0].content().and_then(|v| PublicKey::from_hex(v).ok()) != Some(expected)
+            {
+                return Err(ObserverPayloadError::InvalidPayload(
+                    "invalid channel observer sender or recipient".into(),
+                ));
+            }
+        }
+    }
     let mut plaintext = nip44::decrypt(
         recipient_keys.secret_key(),
         &event.pubkey,
@@ -121,15 +216,129 @@ pub fn decrypt_observer_payload<T: DeserializeOwned>(
         });
     }
 
-    let result = serde_json::from_str(&plaintext);
+    // Validate the signed cleartext scope before any consumer sees the payload,
+    // including archive ingestion paths that bypass the live desktop hook.
+    let result = (|| {
+        if observer_channel(event)?.is_some() {
+            let value: serde_json::Value = serde_json::from_str(&plaintext)?;
+            validate_channel_payload(event, &value)?;
+        }
+        Ok(serde_json::from_str(&plaintext)?)
+    })();
     plaintext.zeroize();
-    Ok(result?)
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use nostr::{EventBuilder, Kind, Tag};
+
+    fn scoped_frame(
+        sender: &Keys,
+        recipient: &Keys,
+        channel: uuid::Uuid,
+        payload: serde_json::Value,
+    ) -> Event {
+        EventBuilder::new(
+            Kind::Custom(crate::kind::KIND_AGENT_OBSERVER_FRAME as u16),
+            encrypt_observer_payload(sender, &recipient.public_key(), &payload).expect("encrypt"),
+        )
+        .tags([
+            Tag::public_key(recipient.public_key()),
+            Tag::parse([OBSERVER_AGENT_TAG, &sender.public_key().to_hex()]).expect("agent"),
+            Tag::parse([OBSERVER_CHANNEL_TAG, &channel.to_string()]).expect("channel"),
+            Tag::parse([OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY]).expect("frame"),
+        ])
+        .sign_with_keys(sender)
+        .expect("sign")
+    }
+
+    #[test]
+    fn channel_observer_encryption_is_per_recipient_and_scope_checked() {
+        let agent = Keys::generate();
+        let member = Keys::generate();
+        let outsider = Keys::generate();
+        let channel = uuid::Uuid::new_v4();
+        let payload = serde_json::json!({"kind":"turn_started", "channelId": channel.to_string()});
+        let event = scoped_frame(&agent, &member, channel, payload.clone());
+        assert_eq!(
+            decrypt_observer_payload::<serde_json::Value>(&member, &event)
+                .expect("member decrypts"),
+            payload
+        );
+        assert!(decrypt_observer_payload::<serde_json::Value>(&outsider, &event).is_err());
+        let wrong = scoped_frame(
+            &agent,
+            &member,
+            channel,
+            serde_json::json!({"kind":"turn_started", "channelId": uuid::Uuid::new_v4().to_string()}),
+        );
+        assert!(decrypt_observer_payload::<serde_json::Value>(&member, &wrong).is_err());
+    }
+
+    #[test]
+    fn channel_observer_rejects_mixed_or_nested_batches_and_missing_scope() {
+        let agent = Keys::generate();
+        let member = Keys::generate();
+        let channel = uuid::Uuid::new_v4();
+        let good = serde_json::json!({"kind":"turn_started", "channelId":channel.to_string()});
+        for bad in [
+            serde_json::json!({"kind":"turn_started"}),
+            serde_json::json!({"kind":"turn_started", "channelId":uuid::Uuid::new_v4().to_string()}),
+            serde_json::json!({"kind":"batch", "channelId":channel.to_string(), "payload":{"events":[]}}),
+        ] {
+            let event = scoped_frame(
+                &agent,
+                &member,
+                channel,
+                serde_json::json!({
+                "kind":"batch", "channelId":channel.to_string(), "payload":{"events":[good,bad]}}),
+            );
+            assert!(decrypt_observer_payload::<serde_json::Value>(&member, &event).is_err());
+        }
+        let event = scoped_frame(
+            &agent,
+            &member,
+            channel,
+            serde_json::json!({
+            "kind":"batch", "channelId":channel.to_string(), "payload":{"events":[good.clone(),good]}}),
+        );
+        assert!(decrypt_observer_payload::<serde_json::Value>(&member, &event).is_ok());
+    }
+
+    #[test]
+    fn channel_observer_rejects_control_or_ambiguous_tags() {
+        let keys = Keys::generate();
+        let channel = uuid::Uuid::new_v4().to_string();
+        for tags in [
+            vec![
+                (OBSERVER_CHANNEL_TAG, channel.as_str()),
+                (OBSERVER_FRAME_TAG, OBSERVER_FRAME_CONTROL),
+            ],
+            vec![
+                (OBSERVER_CHANNEL_TAG, channel.as_str()),
+                (OBSERVER_CHANNEL_TAG, channel.as_str()),
+                (OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY),
+            ],
+            vec![
+                (OBSERVER_CHANNEL_TAG, "invalid"),
+                (OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY),
+            ],
+        ] {
+            let event = EventBuilder::new(
+                Kind::Custom(crate::kind::KIND_AGENT_OBSERVER_FRAME as u16),
+                "",
+            )
+            .tags(
+                tags.into_iter()
+                    .map(|(k, v)| Tag::parse([k, v]).expect("tag")),
+            )
+            .sign_with_keys(&keys)
+            .expect("sign");
+            assert!(observer_channel(&event).is_err());
+        }
+    }
 
     #[test]
     fn observer_payload_round_trips_with_nip44() {

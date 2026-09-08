@@ -5,6 +5,8 @@ import {
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
+import { useChannelsQuery } from "@/features/channels/hooks";
+import { setObserverViewerAccess } from "@/features/agents/channelObserverPolicy";
 import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -13,21 +15,15 @@ import { normalizePubkey } from "@/shared/lib/pubkey";
 
 type IngestionAgent = Pick<ManagedAgent, "pubkey" | "status">;
 
-/**
- * Combine locally managed agents with relay agents the current identity
- * declared-owns (NIP-OA `ownerPubkey == me`) into one ingestion list.
- *
- * Managed agents keep their real status; owned relay agents that are not
- * managed locally are treated as `deployed` so the observer subscription
- * starts and their frames decrypt. Registering non-owned agents would be
- * pointless — observer frames are `#p`-addressed to the owner, so frames for
- * agents we do not own never arrive on our subscription in the first place.
+/** Combine managed, owned, and joined-channel agents for activity ingestion.
+ * Observation does not grant management rights; ingress validates each frame.
  */
 export function combineObserverIngestionAgents(
   managedAgents: readonly IngestionAgent[],
   relayAgentPubkeys: readonly string[],
   ownerByPubkey: ReadonlyMap<string, string>,
   currentPubkey: string | null | undefined,
+  sharedAgentPubkeys: ReadonlySet<string> = new Set(),
 ): IngestionAgent[] {
   const managed = managedAgents.map((agent) => ({
     pubkey: agent.pubkey,
@@ -48,7 +44,10 @@ export function combineObserverIngestionAgents(
       continue;
     }
     const owner = ownerByPubkey.get(key);
-    if (owner && normalizePubkey(owner) === me) {
+    if (
+      (owner && normalizePubkey(owner) === me) ||
+      sharedAgentPubkeys.has(key)
+    ) {
       owned.push({ pubkey, status: "deployed" as const });
     }
   }
@@ -56,15 +55,14 @@ export function combineObserverIngestionAgents(
 }
 
 /**
- * App-level owner-global observer ingestion.
+ * App-level owner and channel-member observer ingestion.
  *
  * Mounted once in AppShell so observer frames (kind 24200) are received,
  * decrypted, and folded into the derived active-turns store regardless of
  * which screen or panel happens to be open. Individual surfaces read from the
  * stores; none of them need to mount their own bridge for ingestion to work.
  *
- * This is the product invariant: if the current identity owns an agent (local
- * managed agent or declared-owned relay agent), its turn activity is ingested
+ * This is the product invariant: if the current identity owns or shares a channel with an agent, its turn activity is ingested
  * app-wide — not only while a panel that happens to mount a bridge is open.
  *
  * Mounts before identity resolves by design: while `currentPubkey` is still
@@ -91,6 +89,48 @@ export function useAgentObserverIngestion() {
   });
   const profiles = profilesQuery.data?.profiles;
 
+  const channels = useChannelsQuery().data;
+  const joinedChannels = React.useMemo(
+    () =>
+      new Set(
+        (channels ?? [])
+          .filter((channel) => channel.isMember)
+          .map((channel) => channel.id),
+      ),
+    [channels],
+  );
+  const sharedAgents = React.useMemo(
+    () =>
+      new Set(
+        (relayAgentsQuery.data ?? [])
+          .filter((agent) =>
+            agent.channelIds.some((id) => joinedChannels.has(id)),
+          )
+          .map((agent) => normalizePubkey(agent.pubkey)),
+      ),
+    [relayAgentsQuery.data, joinedChannels],
+  );
+  const ownedAgents = React.useMemo(
+    () =>
+      new Set([
+        ...(managedAgents ?? []).map((agent) => normalizePubkey(agent.pubkey)),
+        ...Object.entries(profiles ?? {})
+          .filter(
+            ([, profile]) =>
+              profile.ownerPubkey &&
+              currentPubkey &&
+              normalizePubkey(profile.ownerPubkey) ===
+                normalizePubkey(currentPubkey),
+          )
+          .map(([pubkey]) => normalizePubkey(pubkey)),
+      ]),
+    [managedAgents, profiles, currentPubkey],
+  );
+  React.useEffect(() => {
+    setObserverViewerAccess(joinedChannels, ownedAgents);
+    return () => setObserverViewerAccess(new Set());
+  }, [joinedChannels, ownedAgents]);
+
   const ingestionAgents = React.useMemo(() => {
     const ownerByPubkey = new Map<string, string>();
     for (const [pubkey, summary] of Object.entries(profiles ?? {})) {
@@ -108,8 +148,9 @@ export function useAgentObserverIngestion() {
       relayAgentPubkeys,
       ownerByPubkey,
       currentPubkey,
+      sharedAgents,
     );
-  }, [currentPubkey, managedAgents, profiles, relayAgentPubkeys]);
+  }, [currentPubkey, managedAgents, profiles, relayAgentPubkeys, sharedAgents]);
 
   useManagedAgentObserverBridge(ingestionAgents);
   useActiveAgentTurnsBridge(ingestionAgents);

@@ -168,7 +168,7 @@ IFS= read -r OWNER_PUBKEY
 
 `configure` asks for your private signing key through a hidden terminal prompt, verifies it against your public key, and configures your manager and channel. Never paste the private key into an agent conversation or channel. If it is already in a private file, add `--owner-key-file "$OWNER_KEY_FILE"`, where that variable contains only the file path.
 
-The command stores your supplied signing key in your own runtime's `.owner-key`, readable only by your account and root, so your manager can authorize new task workers. This is the team's shared-root trust model. It uses your own authorization; do not copy another person's key. If you cannot access your Buzz key, report that specific blocker.
+The command uses your signing key once to authorize the manager and saves only that signed authorization. New workers are authorized with the manager's own key; your private key is not saved. The relay permits one worker generation beneath a directly human-authorized manager, provided that human is still a relay member. Workers cannot recursively delegate through that chain. Existing worker identities and authorizations stay unchanged. If you cannot access your Buzz key, report that specific blocker. Existing `.owner-key` files are preserved: remove one only after verifying the updated installation can create a worker without reading it and checking no legacy tool still needs it.
 
 ## 4. Start and verify — you or any root operator
 
@@ -194,7 +194,7 @@ For each ready account, verify:
 1. Its watcher, manager supervisor, worker supervisor and reporter are active; logs show successful relay access.
 2. Its exact saved manager session remains alive across two supervisor checks. Another Claude session in the same folder does not count.
 3. A message you send in its personal Buzz channel receives a reply from the correct manager and the sidebar status is fresh.
-4. A small authorized task creates a worker owned by that person. The worker replies, sleeps, and wakes in the same saved conversation.
+4. A small authorized task creates a worker owned by their manager. Channel members can view its live activity; viewing does not grant runtime control. The worker replies, sleeps, and wakes in the same saved conversation.
 
 New services use `buzz-manager@USER`, `buzz-manager-watch@USER`, `buzz-worker-supervisor@USER` and `buzz-workspace-reporter@USER`. Worker services use `buzz-worker-USER@SLUG`, so two people can use the same task slug. Inspect actual unit definitions for runtime and log paths. See [manager checks](s2-manager-supervisor.md) and [worker operations](s2-worker-operations.md).
 

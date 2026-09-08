@@ -1,3 +1,8 @@
+import {
+  acceptsObserverViewerPayload,
+  unwrapObserverBatch,
+  resetObserverViewerAccess,
+} from "./channelObserverPolicy";
 import * as React from "react";
 
 import { subscribeToAgentObserverFrames } from "@/shared/api/observerRelay";
@@ -153,7 +158,6 @@ const projectChannelRequestListeners = new Set<
 const knownAgentPubkeys = new Set<string>();
 const knownAgentsBySubscription = new Map<string, Set<string>>();
 const pendingUnknownAgentFrames: RelayEvent[] = [];
-
 // Callback invoked when session_config_captured is received, so React Query
 // can invalidate the config-surface query for the affected agent. Wired up
 // by useManagedAgentObserverBridge via setSessionConfigCapturedCallback.
@@ -443,33 +447,12 @@ export function isObserverEventAfter(
   return candidate.seq > stored.seq;
 }
 
-// Observer event kind for a batch envelope wrapping multiple events. The ACP
-// harness publishes one frame per second; everything that accumulated between
-// ticks arrives as `{ kind: "batch", payload: { events: [...] } }` with every
-// inner event carrying its own seq/timestamp. Inner events are processed
-// exactly as unbatched ones; the envelope itself is never stored.
-const OBSERVER_BATCH_KIND = "batch";
-
-// Expand a decrypted observer event into its inner events when it is a batch
-// envelope; a non-batch event passes through as a single-element array. A
-// malformed envelope (no events array) degrades to the envelope itself so a
-// harness bug cannot silently blank the session viewer.
-function unwrapObserverBatch(parsed: ObserverEvent): ObserverEvent[] {
-  if (parsed.kind !== OBSERVER_BATCH_KIND) {
-    return [parsed];
-  }
-  const payload = parsed.payload as { events?: unknown } | null;
-  const events = Array.isArray(payload?.events)
-    ? (payload.events as ObserverEvent[])
-    : null;
-  return events && events.length > 0 ? events : [parsed];
-}
-
 // Per-event processing shared by every event a live frame carries (one for a
 // plain frame, many for a batch envelope).
 function processLiveObserverEvents(
   agentPubkey: string,
   events: readonly ObserverEvent[],
+  readOnly = false,
 ) {
   // Commit the full envelope before dispatching synchronous specialized
   // callbacks. Those callbacks historically observed their triggering frame
@@ -507,6 +490,7 @@ function processLiveObserverEvents(
         });
       }
     }
+    if (readOnly) continue;
     const managementRequest = parseAgentManagementRequest(parsed.payload);
     if (managementRequest) {
       for (const listener of agentManagementListeners) {
@@ -576,7 +560,13 @@ async function handleRelayObserverEvent(
     if (activeGeneration !== generation) {
       return;
     }
-    processLiveObserverEvents(agentPubkey, unwrapObserverBatch(parsed));
+    const inner = unwrapObserverBatch(parsed);
+    const readOnly = event.tags.some((tag) => tag[0] === "observer_channel");
+    if (
+      !acceptsObserverViewerPayload(event, inner, normalizePubkey(agentPubkey))
+    )
+      return;
+    processLiveObserverEvents(agentPubkey, inner, readOnly);
   } catch (error) {
     if (activeGeneration !== generation) {
       return;
@@ -863,7 +853,16 @@ export async function ingestArchivedObserverEvents(
     }
     try {
       const parsed = (await _decryptFn(event)) as ObserverEvent;
-      for (const inner of unwrapObserverBatch(parsed)) {
+      const expanded = unwrapObserverBatch(parsed);
+      if (
+        !acceptsObserverViewerPayload(
+          event,
+          expanded,
+          normalizePubkey(agentPubkey),
+        )
+      )
+        continue;
+      for (const inner of expanded) {
         // Route archived events to the channel-scoped archive window (no cap)
         // rather than the per-agent live-relay store (MAX_OBSERVER_EVENTS cap).
         // Events without a channelId fall through to the live store so they
@@ -927,6 +926,7 @@ export function syncAgentObserverEvents(
 
 export function resetAgentObserverStore() {
   generation += 1;
+  resetObserverViewerAccess();
   const unsubscribe = unsubscribeRelay;
   unsubscribeRelay = null;
   startPromise = null;
@@ -965,8 +965,9 @@ export function _testRegisterKnownAgents(
 export function _testProcessLiveObserverEvents(
   agentPubkey: string,
   events: readonly ObserverEvent[],
+  readOnly = false,
 ): void {
-  processLiveObserverEvents(agentPubkey, events);
+  processLiveObserverEvents(agentPubkey, events, readOnly);
 }
 
 /**

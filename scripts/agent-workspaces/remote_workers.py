@@ -41,9 +41,9 @@ def spawn(config, slug, task):
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         metadata = workers / f'{slug}.json'
         import coincurve
-        owner = secret_key((root / '.owner-key').read_text())
-        if pubkey(owner) != config['owner_pubkey']:
-            raise ValueError('Stored owner key differs from configured owner')
+        owner = secret_key((root / '.buzz-key').read_text())
+        if pubkey(owner) != config['manager_pubkey']:
+            raise ValueError('Stored manager key differs from configured manager')
         if metadata.exists():
             worker = load_json(metadata)
             if worker.get('state') not in ('preparing', 'starting'):
@@ -320,7 +320,7 @@ def run_component(config, component, slug=None):
                 'BUZZ_ACP_KINDS': '9', 'BUZZ_ACP_CONTEXT_MESSAGE_LIMIT': '100',
                 'BUZZ_ACP_SESSION_MAP': str(root / 'workers' / f'{slug}.sessions.json'),
                 'BUZZ_ACP_RESPOND_TO': 'anyone', 'BUZZ_ACP_AGENTS': '1',
-                'BUZZ_ACP_RELAY_OBSERVER': 'true', 'BUZZ_ACP_MULTIPLE_EVENT_HANDLING': 'steer'})
+                'BUZZ_ACP_RELAY_OBSERVER': 'true', 'BUZZ_ACP_OBSERVER_CHANNEL_MEMBERS': 'true', 'BUZZ_ACP_MULTIPLE_EVENT_HANDLING': 'steer'})
     os.chdir(root.parent / 'work' / slug)
     with (root / 'workers' / f'{slug}.out').open('a') as out:
         os.dup2(out.fileno(), 1)

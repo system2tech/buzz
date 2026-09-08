@@ -97,7 +97,7 @@ IFS= read -r OWNER_PUBKEY
 "$RUNTIME/bin/buzz-local" status
 ```
 
-Enter your private key only at the hidden prompt. Configuration verifies the matching identity, authorizes the separate manager, creates its private channel and adds you as an owner. The key is saved in the runtime's private `.owner-key` file so this Mac can authorize task workers without relying on a remote signer. An existing installation that uses a remote signer keeps that arrangement unless you explicitly migrate it.
+Enter your private key only at the hidden prompt. Configuration verifies the matching identity, authorizes the separate manager, creates its private channel and adds you as an owner. The key is used once and is not saved; the manager signs new worker authorizations with its own key. Existing `.owner-key` files are preserved. Remove one only after verifying worker creation with the updated tool and confirming no legacy tool still uses it. An existing installation that uses a remote signer keeps that arrangement unless you explicitly migrate it.
 
 If configuration stops after an uncertain channel-creation response, inspect the saved `local.json` and your channels before retrying. The tool preserves the identity and records the uncertainty to avoid duplicate channels. A failed owner-membership step can be retried using the same key and channel.
 

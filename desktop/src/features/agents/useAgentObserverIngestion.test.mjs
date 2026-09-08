@@ -86,3 +86,26 @@ describe("combineObserverIngestionAgents", () => {
     assert.deepEqual(result, [{ pubkey: AGENT_LOCAL, status: "running" }]);
   });
 });
+
+it("adds channel-shared workers without claiming ownership", () => {
+  assert.deepEqual(
+    combineObserverIngestionAgents(
+      [],
+      [AGENT_FOREIGN],
+      new Map([[AGENT_FOREIGN, OTHER]]),
+      ME,
+      new Set([AGENT_FOREIGN]),
+    ),
+    [{ pubkey: AGENT_FOREIGN, status: "deployed" }],
+  );
+  assert.deepEqual(
+    combineObserverIngestionAgents(
+      [],
+      [AGENT_FOREIGN],
+      new Map([[AGENT_FOREIGN, OTHER]]),
+      ME,
+      new Set(),
+    ),
+    [],
+  );
+});

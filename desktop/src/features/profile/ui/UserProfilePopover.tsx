@@ -329,8 +329,7 @@ function UserProfilePopoverBody({
     (!isBotProfile || viewerIsOwner);
   const showAnyProfileActions =
     showHumanProfileActions || showMessageAction || showHuddleAction;
-  const canViewActivity =
-    isBotProfile && viewerIsOwner && canOpenAgentActivity(pubkey);
+  const canViewActivity = isBotProfile && canOpenAgentActivity(pubkey);
   const presenceStatus = presenceQuery.data?.[pubkey.toLowerCase()];
   const userStatus = userStatusQuery.data?.[pubkey.toLowerCase()];
   const userStatusText = userStatus?.text.trim() ?? "";

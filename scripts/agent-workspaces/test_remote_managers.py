@@ -170,11 +170,11 @@ class MultiUserTests(unittest.TestCase):
             w = root / 'workers'
             w.mkdir(parents=True)
             (root / '.ready').touch()
-            (root / '.owner-key').write_text('owner')
+            (root / '.buzz-key').write_text('owner')
             (w / 'research.key').write_text('worker')
             common.save_json(w / 'research.json', {'slug': 'research', 'task': 'test',
                             'state': 'preparing', 'pubkey': 'worker-pub', 'channel': ''})
-            config = {'root': str(root), 'owner_pubkey': 'owner-pub', 'name': 'Test'}
+            config = {'root': str(root), 'owner_pubkey': 'human-pub', 'manager_pubkey': 'owner-pub', 'name': 'Test'}
             with patch.dict(sys.modules, {'coincurve': SimpleNamespace()}), \
                  patch.object(workers, 'secret_key', side_effect=lambda value: value), \
                  patch.object(workers, 'pubkey', side_effect=lambda value: value + '-pub'), \
@@ -185,17 +185,38 @@ class MultiUserTests(unittest.TestCase):
                 self.assertEqual(buzz.call_count, 2)
                 self.assertEqual((w / 'research.key').read_text(), 'worker')
 
+    def test_new_worker_is_signed_by_manager_without_human_secret(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'workers').mkdir()
+            (root / '.ready').touch()
+            (root / '.buzz-key').write_text('manager')
+            key = SimpleNamespace(secret=b'x'*32)
+            config = {'root': directory, 'manager_pubkey': 'manager-pub',
+                      'owner_pubkey': 'human-pub', 'name': 'Test'}
+            with patch.dict(sys.modules, {'coincurve': SimpleNamespace(PrivateKey=lambda: key)}), \
+                 patch.object(workers, 'secret_key', side_effect=lambda value: value), \
+                 patch.object(workers, 'pubkey', side_effect=lambda value: 'manager-pub' if value == 'manager' else 'worker-pub'), \
+                 patch.object(workers, 'auth_tag', return_value=['signed-by-manager']) as sign, \
+                 patch.object(workers, 'buzz', side_effect=RuntimeError('offline')):
+                with self.assertRaisesRegex(RuntimeError, 'offline'):
+                    workers.spawn(config, 'sample', 'test')
+            sign.assert_called_once_with('manager', 'worker-pub')
+            self.assertFalse((root / '.owner-key').exists())
+            self.assertEqual(common.load_json(root / 'workers/sample.json')['auth_tag'],
+                             ['signed-by-manager'])
+
     def test_ambiguous_channel_creation_cannot_create_duplicate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'mrfix'
             w = root / 'workers'
             w.mkdir(parents=True)
             (root / '.ready').touch()
-            (root / '.owner-key').write_text('owner')
+            (root / '.buzz-key').write_text('owner')
             (w / 'research.key').write_text('worker')
             common.save_json(w / 'research.json', {'slug': 'research', 'task': 'test',
                 'state': 'preparing', 'pubkey': 'worker-pub', 'channel': '', 'channel_pending': True})
-            config = {'root': str(root), 'owner_pubkey': 'owner-pub', 'name': 'Test'}
+            config = {'root': str(root), 'owner_pubkey': 'human-pub', 'manager_pubkey': 'owner-pub', 'name': 'Test'}
             with patch.dict(sys.modules, {'coincurve': SimpleNamespace()}), \
                  patch.object(workers, 'secret_key', side_effect=lambda value: value), \
                  patch.object(workers, 'pubkey', side_effect=lambda value: value + '-pub'), \
@@ -221,6 +242,7 @@ class MultiUserTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'membership failed'):
                     setup.configure_locked(args)
             saved = common.load_json(root / 'manager.json')
+            self.assertFalse((root / '.owner-key').exists())
             self.assertEqual(saved['channel'], 'saved-channel')
             self.assertFalse(saved.get('configured', False))
             self.assertFalse(saved.get('channel_pending', False))
@@ -254,6 +276,7 @@ class MultiUserTests(unittest.TestCase):
             self.assertEqual(env['HOME'], '/home/harri')
             self.assertEqual(env['BUZZ_ACP_SESSION_MAP'], str(w / 'research.sessions.json'))
             self.assertEqual(env['BUZZ_ACP_MULTIPLE_EVENT_HANDLING'], 'steer')
+            self.assertEqual(env['BUZZ_ACP_OBSERVER_CHANNEL_MEMBERS'], 'true')
             self.assertNotIn('CLAUDE_CONFIG_DIR', env)
 
 

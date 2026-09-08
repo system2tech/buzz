@@ -94,7 +94,7 @@ impl Drop for ReplayGuard {
 }
 
 /// Event delivered through the in-process observer bus.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObserverEvent {
     /// Monotonic process-local sequence number.

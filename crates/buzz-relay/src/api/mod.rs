@@ -1,5 +1,8 @@
 //! HTTP API — media, git, NIP-05, and the Nostr HTTP bridge.
 
+#[cfg(test)]
+mod delegation_tests;
+
 pub mod admin;
 pub mod bridge;
 pub mod events;
@@ -50,7 +53,7 @@ pub mod relay_members {
         OpenRelay,
         /// Caller is directly present in `relay_members`.
         Member,
-        /// Caller is admitted through a NIP-OA owner that is a relay member.
+        /// Caller is admitted through a direct owner or one human-owned manager.
         ViaOwner(nostr::PublicKey),
         /// Caller is not admitted.
         Denied,
@@ -101,6 +104,33 @@ pub mod relay_members {
                             );
                             return Ok(MembershipDecision::ViaOwner(owner_pubkey));
                         }
+                        // Exactly one additional generation: a human-authorized manager
+                        // may attest workers. Never recursively follow ownership chains.
+                        // Both lookups use the request's tenant and fresh membership.
+                        if let Some((_, Some(human))) = state
+                            .db
+                            .get_agent_channel_policy(community, owner_pubkey.as_bytes())
+                            .await
+                            .map_err(|e| format!("manager ownership check failed: {e}"))?
+                        {
+                            let human_is_member = state
+                                .db
+                                .is_relay_member(community, &hex::encode(&human))
+                                .await
+                                .map_err(|e| {
+                                    format!("manager owner membership check failed: {e}")
+                                })?;
+                            if delegated_worker_allowed(
+                                pubkey_bytes,
+                                owner_pubkey.as_bytes(),
+                                &human,
+                                human_is_member,
+                            ) {
+                                // The signing manager remains the immediate owner; do not
+                                // incorrectly materialize its human as the worker's signer.
+                                return Ok(MembershipDecision::ViaOwner(owner_pubkey));
+                            }
+                        }
                     }
                     Err(e) => {
                         info!(agent = %pubkey_hex, "NIP-OA auth tag invalid: {e}");
@@ -112,10 +142,24 @@ pub mod relay_members {
         Ok(MembershipDecision::Denied)
     }
 
+    fn delegated_worker_allowed(
+        worker: &[u8],
+        manager: &[u8],
+        human: &[u8],
+        human_is_direct_member: bool,
+    ) -> bool {
+        human_is_direct_member
+            && human.len() == 32
+            && worker != manager
+            && worker != human
+            && manager != human
+    }
+
     /// Enforce relay membership for a pubkey, with NIP-OA agent delegation fallback.
     ///
     /// Returns `Ok(Some(owner_pubkey))` when the agent is not a direct member but
-    /// its NIP-OA owner *is* — access is granted via delegation.
+    /// its NIP-OA owner is, or that owner is a manager whose own verified owner
+    /// is a direct member — access is granted via at most two attestations.
     ///
     /// On open relays (`require_relay_membership = false`), returns `Ok(None)`
     /// immediately — no membership check is performed. Callers that need NIP-OA
@@ -238,6 +282,20 @@ pub mod relay_members {
         use super::*;
         use buzz_sdk::nip_oa::compute_auth_tag;
         use nostr::Keys;
+
+        #[test]
+        fn delegated_worker_requires_direct_root_and_distinct_identities() {
+            let worker = [1; 32];
+            let manager = [2; 32];
+            let human = [3; 32];
+            assert!(delegated_worker_allowed(&worker, &manager, &human, true));
+            // Removed human membership and a third-hop parent are both non-direct.
+            assert!(!delegated_worker_allowed(&worker, &manager, &human, false));
+            assert!(!delegated_worker_allowed(&worker, &worker, &human, true));
+            assert!(!delegated_worker_allowed(&worker, &manager, &worker, true));
+            assert!(!delegated_worker_allowed(&worker, &manager, &manager, true));
+            assert!(!delegated_worker_allowed(&worker, &manager, &[3; 31], true));
+        }
 
         /// Valid NIP-OA auth tag → returns Some(owner_pubkey).
         #[test]

@@ -8,15 +8,39 @@ it describes — a list that drifts is worse than no list, because it is trusted
 `c856be0fb954`; that merge brought 24 commits including one reworking
 `crates/buzz-acp/src/pool.rs` (#6946) and applied cleanly with no conflicts —
 835 crate tests pass on the merged tree.
-**Deployed relay, 2026-09-07:** `buzz-manager-sidebar:66c65da05`, built from
+**Deployed relay, 2026-09-08:** `buzz-channel-activity:latest`, built from
 [the compatibility branch](https://github.com/system2tech/buzz/tree/codex/manager-task-relay)
-at [66c65da05](https://github.com/system2tech/buzz/commit/66c65da0581723db8fe926d9364ad708fa7e8a18).
-It adds the manager/task protocol to the previously deployed
-[c856be0fb954](https://github.com/block/buzz/commit/c856be0fb954), retaining that
-release's dependencies and migrations. The image replaces only the relay binary
-inside the exact previous image, `ghcr.io/block/buzz@sha256:47810cc5ba245ce9cdf5987fc463ea261ee3d507377a2208bd22fed429607164`.
+with channel observer patches (core observer, relay API gate, event handler delivery).
+It extends `buzz-manager-sidebar:66c65da05` (2026-09-07) with channel-member activity
+support. The image replaces only the relay binary inside the previous image.
 The desktop and reporters use `s2`; their protocol implementation is also on that
-branch. This is an intentional, tested version split, not an upstream release.
+branch. Bridge binaries updated on agents host and Mac.
+
+## Channel member activity and manager delegation
+
+**Deployed 2026-09-08.** [Channel activity](docs/s2-channel-activity.md) separates
+worker creation, observation and owner control. Managers sign new workers with their
+own keys; each task-channel member receives encrypted, read-only live activity. Relay
+membership, payload validation and desktop handling change together. Existing worker
+identities and authorizations are preserved.
+
+Relay: `buzz-channel-activity:latest` image on the relay host, built from the
+[compatibility branch](https://github.com/system2tech/buzz/tree/codex/manager-task-relay)
+with channel observer patches applied (core observer + relay API gate + event handler).
+The image replaces only the relay binary inside the previous
+`buzz-manager-sidebar:66c65da05` base. Bridge: `/opt/buzz-bin/buzz-acp-channel-activity`
+on the agents host; `/Users/nlgkhoi/mrfix/bin/buzz-acp` on the Mac. Desktop sidecar
+updated at `desktop/src-tauri/binaries/buzz-acp-aarch64-apple-darwin` and
+`target/debug/buzz-acp`.
+
+Rollback relay: `ssh relay 'cd /opt/buzz/deploy/compose && cp .env.before-channel-activity .env && BUZZ_IMAGE=buzz-manager-sidebar:66c65da05 docker compose -p buzz-prod up -d --no-deps --pull never --timeout 40 --wait relay'`.
+Rollback agents bridge: `ssh agents 'ln -sf buzz-acp-resume /opt/buzz-bin/buzz-acp'`.
+Rollback Mac bridge: `cp ~/mrfix/bin/buzz-acp.bak-pre-channel-activity ~/mrfix/bin/buzz-acp && codesign --force -s - ~/mrfix/bin/buzz-acp`.
+
+Enable per-worker: set `BUZZ_ACP_OBSERVER_CHANNEL_MEMBERS=true` in the worker's
+launch script. Existing workers continue with owner-only observation until opted in.
+See the [guide](docs/s2-channel-activity.md) for rollout order, acceptance checks
+and the 64-viewer delivery limit.
 
 ## Inventory
 
@@ -35,6 +59,7 @@ branch. This is an intentional, tested version split, not an upstream release.
 | overridable dev vite port | `scripts/instance-env.sh` | **one-line generalisation; offer upstream** |
 | reply-mentions-the-asker | `crates/buzz-acp/src/base_prompt.md` | **behaviour change; workaround for an upstream gap** |
 | manager/task sidebar | `desktop/src/features/sidebar/`, `scripts/agent-workspaces/`, kind 30180 in core/SDK/relay/CLI, DB activity and search exclusions | **S2 desktop and relay extension; carries merge risk** |
+| channel member activity | `crates/buzz-acp/src/channel_observer.rs`, `crates/buzz-core/src/observer.rs`, `crates/buzz-relay/src/{api/mod,handlers/event}.rs`, `desktop/src/features/agents/channelObserverPolicy.ts`, `desktop/src/features/agents/{observerRelayStore,useAgentObserverIngestion}.ts` | **S2 relay + desktop + bridge extension; carries merge risk** |
 
 Changes to existing runtime and UI code carry merge risk; the runbooks and
 reporter scripts are additive. The transcript fix is the one to offer upstream

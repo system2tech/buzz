@@ -134,14 +134,13 @@ def configure(config, args):
         if config.get('owner_pubkey') and config['owner_pubkey'] != args.owner_pubkey:
             raise ValueError('Existing owner differs; refusing an identity replacement')
         raw = Path(args.owner_key_file).read_text() if args.owner_key_file else getpass.getpass(
-            'Your Buzz private key (hidden; saved locally to authorize workers): ')
+            'Your Buzz private key (hidden; used once to authorize your manager): ')
         key = secret_key(raw)
         if pubkey(key) != args.owner_pubkey:
             raise ValueError('Private key does not match the supplied public key')
         config.update(owner_pubkey=args.owner_pubkey, auth_tag=auth_tag(key, config['manager_pubkey']))
         buzz(config, ['users', 'set-profile', '--name', config['name'] + ' Mr. Fix',
                       '--about', 'Personal local manager'])
-        atomic(root / '.owner-key', key.secret.hex() + '\n')
         save_json(root / 'local.json', config)
         checked_channel_create(config, config, root / 'local.json', config['channel_name'],
                                config['name'] + "'s local manager")
@@ -162,7 +161,7 @@ def status(config):
         logged_in = False
     checks = {'claude_login': logged_in, 'brain': (Path(config['brain']) / 'CLAUDE.md').is_file(),
               'buzz_identity': bool(config.get('configured') and config.get('channel')
-                                    and (root / '.owner-key').is_file())}
+                                    and config.get('auth_tag') and (root / '.buzz-key').is_file())}
     states = {name: inspect_job(config, name) for name in LABELS}
     exact = False
     if (root / '.session-id').exists():
@@ -233,9 +232,9 @@ def spawn(config, slug, task):
     with (registry / '.lock').open('a') as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         target = registry / (slug + '.json')
-        owner = secret_key((root / '.owner-key').read_text())
-        if pubkey(owner) != config['owner_pubkey']:
-            raise ValueError('Stored owner signing identity differs')
+        owner = secret_key((root / '.buzz-key').read_text())
+        if pubkey(owner) != config['manager_pubkey']:
+            raise ValueError('Stored manager signing identity differs')
         if target.exists():
             record = load_json(target)
             if record['state'] not in ('preparing', 'starting') or record['task'] != task:
@@ -468,7 +467,7 @@ def run(config, component, slug=None):
                BUZZ_ACP_CHANNELS=record['channel'], BUZZ_ACP_SUBSCRIBE='all', BUZZ_ACP_KINDS='9',
                BUZZ_ACP_CONTEXT_MESSAGE_LIMIT='100', BUZZ_ACP_SESSION_MAP=str(root / 'workers' / (slug + '.sessions.json')),
                BUZZ_ACP_RESPOND_TO='anyone', BUZZ_ACP_AGENTS='1', BUZZ_ACP_RELAY_OBSERVER='true',
-               BUZZ_ACP_MULTIPLE_EVENT_HANDLING='steer')
+               BUZZ_ACP_MULTIPLE_EVENT_HANDLING='steer', BUZZ_ACP_OBSERVER_CHANNEL_MEMBERS='true')
     os.chdir(root / 'tasks' / slug)
     with (root / 'workers' / (slug + '.out')).open('a') as out:
         os.dup2(out.fileno(), 1)

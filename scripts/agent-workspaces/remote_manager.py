@@ -224,7 +224,7 @@ def configure_locked(args):
     if config.get('owner_pubkey') and config['owner_pubkey'] != args.owner_pubkey:
         raise ValueError('Owner identity is already configured; do not replace it through onboarding')
     raw = (Path(args.owner_key_file).read_text() if args.owner_key_file
-           else getpass.getpass('Your Buzz secret key (hidden; saved for worker authorization): '))
+           else getpass.getpass('Your Buzz secret key (hidden; used once to authorize your manager): '))
     owner = secret_key(raw)
     if pubkey(owner) != args.owner_pubkey:
         raise ValueError('Secret key does not match the specified owner public key')
@@ -233,7 +233,6 @@ def configure_locked(args):
     # Authorize the fresh manager before channel creation so ownership is recorded.
     buzz(config, ['users', 'set-profile', '--name', f"{config['name']} Mr. Fix",
                   '--about', f"Personal remote manager for {config['name']}"])
-    atomic(root / '.owner-key', owner.secret.hex() + '\n')
     save_json(root / 'manager.json', config)
     if not config.get('channel'):
         if config.get('channel_pending'):
@@ -265,7 +264,7 @@ def status_one(user):
     checks = {'ssh_public_key': ssh_keys.is_file() and ssh_keys.stat().st_size > 0,
               'brain_checkout': (Path(account.pw_dir) / 'mr-fix/CLAUDE.md').is_file(),
               'buzz_identity': bool(config.get('configured') and config.get('owner_pubkey') and config.get('channel')
-                                    and (root / '.owner-key').is_file()),
+                                    and config.get('auth_tag') and (root / '.buzz-key').is_file()),
               'claude_login': False}
     try:
         result = as_user(user, [config['tools']['claude'], 'auth', 'status', '--json'])

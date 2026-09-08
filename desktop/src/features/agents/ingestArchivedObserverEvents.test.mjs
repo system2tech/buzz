@@ -1,3 +1,4 @@
+import { setObserverViewerAccess } from "./channelObserverPolicy.ts";
 /**
  * Tests for ingestArchivedObserverEvents — the read-back ingest seam that loads
  * archived observer frames from the local SQLite archive into the observer store.
@@ -74,6 +75,7 @@ function makeDecryptFail() {
 describe("ingestArchivedObserverEvents", () => {
   beforeEach(() => {
     resetAgentObserverStore();
+    setObserverViewerAccess(new Set(), new Set([AGENT_PUBKEY, OTHER_PUBKEY]));
   });
 
   it("test_unknown_agent_drops_event_before_decrypt", async () => {
@@ -687,6 +689,7 @@ describe("eager initial hydration loop control flow (production runHydrationLoop
 describe("archive window holds more than MAX_OBSERVER_EVENTS (3000) frames", () => {
   beforeEach(() => {
     resetAgentObserverStore();
+    setObserverViewerAccess(new Set(), new Set([AGENT_PUBKEY, OTHER_PUBKEY]));
   });
 
   it("test_archive_window_retains_all_events_beyond_3000_cap", async () => {
@@ -763,6 +766,7 @@ describe("archive window holds more than MAX_OBSERVER_EVENTS (3000) frames", () 
 
     // Reset must wipe the archive window.
     resetAgentObserverStore();
+    setObserverViewerAccess(new Set(), new Set([AGENT_PUBKEY, OTHER_PUBKEY]));
 
     assert.equal(
       _testGetArchivedChannelEvents(AGENT_PUBKEY, "chan-1").length,
@@ -804,6 +808,7 @@ import { mergeObserverEventWindows } from "@/features/agents/ui/agentSessionPane
 describe("archive page subscription notification", () => {
   beforeEach(() => {
     resetAgentObserverStore();
+    setObserverViewerAccess(new Set(), new Set([AGENT_PUBKEY, OTHER_PUBKEY]));
   });
 
   it("test_full_archive_page_notifies_subscribers", async () => {
@@ -882,6 +887,7 @@ describe("archive page subscription notification", () => {
 describe("raw-event-level merge: stateful aggregates across live/archive boundary", () => {
   beforeEach(() => {
     resetAgentObserverStore();
+    setObserverViewerAccess(new Set(), new Set([AGENT_PUBKEY, OTHER_PUBKEY]));
   });
 
   it("test_tool_start_in_archive_plus_update_in_live_yields_complete_row", () => {
