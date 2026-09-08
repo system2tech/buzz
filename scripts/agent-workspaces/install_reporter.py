@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import plistlib
 import pwd
+import re
 import shlex
 import shutil
 import subprocess
@@ -74,6 +75,18 @@ def patch_hooks(root):
         temporary.replace(path)
 
 
+def linux_service_names(user, service_name=None, supervisor_unit=None):
+    """Default to separate per-user services; legacy names require explicit flags."""
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,30}", user):
+        raise ValueError("invalid Linux account")
+    service_name = service_name or f"buzz-workspace-reporter@{user}.service"
+    supervisor_unit = supervisor_unit or f"buzz-worker-supervisor@{user}.service"
+    for value in (service_name, supervisor_unit):
+        if not re.fullmatch(r"[a-zA-Z0-9_@.-]+\.service", value) or value.startswith("-"):
+            raise ValueError("invalid service name")
+    return service_name, supervisor_unit
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True)
@@ -83,6 +96,9 @@ def main():
     parser.add_argument("--buzz", required=True, help="Absolute path to the CLI built with agent-workspace")
     parser.add_argument("--user", default=pwd.getpwuid(os.getuid()).pw_name)
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--service-name", help="Explicit legacy reporter unit override on Linux")
+    parser.add_argument("--supervisor-unit", help="Explicit legacy worker-supervisor unit on Linux")
+    parser.add_argument("--worker-unit-template", default="buzz-worker@{slug}.service")
     args = parser.parse_args()
     root = Path(args.root).resolve()
     account = pwd.getpwnam(args.user)
@@ -99,7 +115,8 @@ def main():
     patch_hooks(root)
     command = ["python3", str(target), "run", "--root", str(root),
                "--manager-pubkey", args.manager_pubkey, "--manager-cwd", args.manager_cwd,
-               "--location", args.location, "--buzz", str(Path(args.buzz).resolve())]
+               "--location", args.location, "--buzz", str(Path(args.buzz).resolve()),
+               "--worker-unit-template", args.worker_unit_template]
     launcher = root / "workspace-reporter.sh"
     launcher.write_text("#!/bin/bash\nset -euo pipefail\n. " + shlex.quote(str(root / "env.sh"))
                         + "\nexec " + shlex.join(command) + "\n")
@@ -119,14 +136,16 @@ def main():
         reload_supervisor = ["launchctl", "kickstart", "-k",
                              f"gui/{account.pw_uid}/com.mrfix.worker-supervisor"]
     else:
-        path = Path("/etc/systemd/system/buzz-workspace-reporter.service")
+        service_name, supervisor_unit = linux_service_names(
+            args.user, args.service_name, args.supervisor_unit)
+        path = Path("/etc/systemd/system") / service_name
         path.write_text("[Unit]\nDescription=Buzz manager/task relationships and lifecycle leases\n"
                         "After=network-online.target\nWants=network-online.target\n\n"
                         f"[Service]\nUser={args.user}\nWorkingDirectory={root}\nExecStart={launcher}\n"
                         "Restart=always\nRestartSec=10\n\n[Install]\nWantedBy=multi-user.target\n")
-        start = ["systemctl", "enable", "--now", "buzz-workspace-reporter.service"]
-        stop = ["systemctl", "stop", "buzz-workspace-reporter.service"]
-        reload_supervisor = ["systemctl", "restart", "buzz-worker-supervisor.service"]
+        start = ["systemctl", "enable", "--now", service_name]
+        stop = ["systemctl", "stop", service_name]
+        reload_supervisor = ["systemctl", "restart", supervisor_unit]
     if os.getuid() == 0:
         for file in (target, launcher):
             os.chown(file, account.pw_uid, account.pw_gid)

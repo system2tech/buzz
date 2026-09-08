@@ -76,7 +76,8 @@ def record_intent(root, slug, intent):
 def command(args, timeout=10):
     """Capture output; callers log categories, never credential-bearing stderr."""
     try:
-        return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout,
+                              env={**os.environ, "LC_ALL": "C"})
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -100,7 +101,7 @@ def publish_failure_category(result):
     return "rejected"
 
 
-def process_state(slug, platform, run=command):
+def process_state(slug, platform, run=command, unit_template="buzz-worker@{slug}.service"):
     """Return (service state, PID); a registered launchd job need not be running."""
     if platform == "darwin":
         r = run(["launchctl", "print", f"gui/{os.getuid()}/com.mrfix.worker.{slug}"])
@@ -116,7 +117,9 @@ def process_state(slug, platform, run=command):
         if state and state[1] == "running" and pid:
             return "running", int(pid[1])
         return "starting", 0
-    r = run(["systemctl", "show", f"buzz-worker@{slug}.service",
+    if not re.fullmatch(r"buzz-worker(?:-[a-z][a-z0-9_-]{0,30})?@\{slug\}\.service", unit_template):
+        raise ValueError("invalid worker unit template")
+    r = run(["systemctl", "show", unit_template.format(slug=slug),
              "--property=ActiveState,MainPID,LoadState"])
     if r is None or r.returncode:
         return "unknown", 0
@@ -229,7 +232,7 @@ def manager_state(root, cwd, run=command):
         if session.get("cwd") != str(cwd):
             continue
         if wanted:
-            session_id = session.get("id", "")
+            session_id = session.get("sessionId") or session.get("id", "")
             if not isinstance(session_id, str):
                 continue
             if len(wanted) == 8 and re.fullmatch(r"[0-9a-f]{8}", wanted):
@@ -312,7 +315,8 @@ class Reporter:
             pubkey = read_text(busy.with_suffix(".pub"))
             if not channel or not re.fullmatch(r"[a-f0-9]{64}", pubkey):
                 continue
-            service, pid = process_state(slug, sys.platform)
+            service, pid = process_state(slug, sys.platform, unit_template=getattr(
+                self.args, "worker_unit_template", "buzz-worker@{slug}.service"))
             started = process_started(pid) if pid else None
             intent = last_intent(self.root, slug)
             intent_file = busy.with_suffix(".workspace-intent.json")
@@ -367,6 +371,7 @@ def main():
     serve.add_argument("--manager-cwd", required=True)
     serve.add_argument("--location", choices=["local", "remote"], required=True)
     serve.add_argument("--buzz", default="buzz")
+    serve.add_argument("--worker-unit-template", default="buzz-worker@{slug}.service")
     serve.add_argument("--once", action="store_true")
     serve.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

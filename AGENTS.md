@@ -6,6 +6,18 @@ code style, PR process, architecture), see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
+## S2 personal-manager setup
+
+When asked to set up a personal local manager, remote manager, or both, first read
+[personal agent setup](docs/s2-personal-agents.md). Follow its linked
+[local](docs/s2-local-manager.md) and [remote](docs/s2-personal-manager-setup.md)
+guides for the requested locations. Inspect and preserve existing installations;
+do not substitute the ordinary Agents-tab workflow or rebuild the relay unless
+needed for the requested setup. Guide the human through provider sign-in and
+private-terminal secret entry; never request private keys in the conversation.
+Complete the guides' verification and distinguish pending authorization from a
+working manager. For recovery, start with [S2 operations](docs/s2-operations.md).
+
 ## Product Contract
 
 Before planning or reviewing a non-trivial change:

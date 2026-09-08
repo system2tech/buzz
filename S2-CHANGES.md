@@ -24,6 +24,9 @@ branch. This is an intentional, tested version split, not an upstream release.
 |---|---|---|
 | onboarding docs | `.github/README.md`, `S2.md` | docs only |
 | always-on agents runbook | `docs/always-on-agents.md` | docs only |
+| personal remote managers | [setup guide](docs/s2-personal-manager-setup.md), `scripts/agent-workspaces/{install_remote_managers,manager_common,remote_manager,remote_workers}.py` | S2 operational tooling; per-user preparation, identity, services and task workers |
+| persistent S2 manager supervisor | [implementation and deployment](docs/s2-manager-supervisor.md) | S2 operational fix; persistent lifetime and exact manager UUID recovery |
+| S2 operational docs and design history | [operations index](docs/s2-operations.md) | docs only; consolidated from Mr. Fix, current values come from deployment |
 | idle-session resume | `crates/buzz-acp/src/{acp,config,lib,observer,pool}.rs` | **behaviour change; carries merge risk** |
 | relay-agent discovery cadence | `desktop/src/features/agents/hooks.ts` | **one-constant change; offer upstream** |
 | s2harness system prompt | `crates/buzz-acp/src/pool.rs` | **behaviour change** |
@@ -84,6 +87,34 @@ test worker was retired and its conversation archived. Local and remote reporter
 renewed status successfully; denied remote records retried after 61.2 seconds.
 Khoi subsequently confirmed the desktop UI works. See the
 [validation evidence and its limits](docs/manager-task-sidebar.md#rollout-validation-2026-09-07).
+
+---
+
+## Personal setup discovery and macOS onboarding — 2026-09-08
+
+The [personal setup entry point](docs/s2-personal-agents.md) is linked from both READMEs and AGENTS.md (also loaded through CLAUDE.md). It routes a setup agent to local, remote, or recovery instructions. The remote guide now includes self-service SSH bootstrap for existing root operators, exact desktop key-copy controls, personal-terminal authorization, and configured executable paths. The shared installer copies the operational guides beside its command.
+
+The [local guide](docs/s2-local-manager.md) now covers first-time macOS setup using the [portable installer](scripts/agent-workspaces/macos/install.py) and [runtime](scripts/agent-workspaces/macos/local_manager.py). They stage user LaunchAgents, keep a distinct manager identity/channel and personal Keychain login, and provide worker creation, retained sessions, sleep/wake and reporting. Existing local installations are inspected and preserved rather than implicitly migrated. Each new installation signs with the person's own authorized key; it does not depend on another person's remote signer.
+
+A fresh-reader review verified discovery and manual-step routing. The final focused suites passed 119 tests: 106 shared/remote tests and 13 macOS tests. Real macOS fixture checks exercised preparation and repeat-run identity preservation, plist validation, paths with spaces, independent launchd worker lifecycle and refusal to control another runtime. Test jobs were removed; existing manager labels were untouched. These checks used a local test executable, with no model or relay calls. Actual personal login, manager replies and worker conversation continuity must still pass the guide's acceptance steps.
+
+Wake transitions on both platforms now share retirement's registry lock and recheck retained worker state before starting. Imported reporter helpers force a predictable locale for process-time parsing. Preserve these boundaries, personal identity separation and loaded-job ownership checks during upstream merges.
+
+---
+
+## Personal remote managers — 2026-09-08
+
+The shared `buzz-manager` command lets any authorized root operator prepare and recover everyone's managers. Each account keeps its own runtime, Claude login, Buzz owner authorization and saved manager identity. Preparation gives the team's requested equal sudo privileges; separate service users prevent accidental account mixups, rather than restricting trusted root administrators.
+
+The [installer](scripts/agent-workspaces/install_remote_managers.py), [manager commands](scripts/agent-workspaces/remote_manager.py), [shared identity/path helpers](scripts/agent-workspaces/manager_common.py) and [worker runtime](scripts/agent-workspaces/remote_workers.py) add per-user manager, watcher, supervisor and reporter services. Worker unit names include both account and task slug. Existing legacy managers remain on their installed services. Reporter installation now defaults to per-user names; updating a legacy service requires explicit name overrides.
+
+Setup preserves existing identities on retry, refuses implicit legacy adoption, checks personal prerequisites before startup and reports one account's failure without preventing others from starting. Worker sleep records message IDs and timestamps, rechecks around stopping, and preserves the watermark across supervisor restarts so messages during stopping or within the same second still trigger waking. The accepted interruption mechanism and deployed adapter remain unchanged.
+
+Live checks prepared four pending accounts, repeated preparation without changing their manager configurations or keys, and verified equal sudo access and private-key permissions. Two real generated services with identical task slugs ran a local test executable under distinct users/homes; stopping one left the other running. Fixtures were removed. The existing manager stayed running, while `start --all` correctly left accounts awaiting personal credentials inactive. The focused suite passed **102 tests**, including [personal-manager contracts](scripts/agent-workspaces/test_remote_managers.py) and [sleep/wake races](scripts/agent-workspaces/test_remote_sleep.py).
+
+These checks do not establish real model replies or complete task-worker onboarding for the new accounts. [Personal setup](docs/s2-personal-manager-setup.md) records the remaining human authorization and verification steps; current server values come from the deployment.
+
+When merging upstream, retain unique user/task service names, personal signing identities, exact manager-session recovery, partial-setup retry behavior and wake-message tests. Adopt upstream provisioning only after those contracts and existing saved conversations can migrate.
 
 ---
 

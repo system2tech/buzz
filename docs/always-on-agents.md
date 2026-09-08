@@ -15,6 +15,14 @@ Upstream's own issue tracker names the gap this fills
 spawned by the desktop app […] Agents die with the laptop. There is no always-on
 agent."*
 
+## First-time setup for a team
+
+Use [personal remote-manager setup](s2-personal-manager-setup.md) for the copyable operator, personal sign-in and self-service steps. Any team member with root access can prepare everyone's accounts, grant their SSH access and start their configured managers. Each person's Claude login, project access and Buzz owner authorization must still be established under their own account.
+
+The shared `buzz-manager` tooling uses per-user services, paths and worker names. Preparation does not mean the manager is running: use its status report to identify missing personal authorization, then verify channel replies and worker sleep/wake after startup. Existing legacy managers keep their installed services until an explicit migration; do not use the older fixed-name reporter installer for new team accounts.
+
+[Server recovery](s2-server-recovery.md) covers restarting existing setups. Validate each configured account; one working manager does not prove everyone is ready.
+
 ## The shape
 
 ```
@@ -198,16 +206,11 @@ session.** Restart it when you change what the agent is allowed to do.
 > place. When changing an agent's behaviour by changing its inputs, name the default that
 > survives your change.
 
-### 1.3 Staying alive
+### 1.4 Staying alive
 
-A timer that asks "is my session running?" and starts one if not. Announce restarts in
-the channel **without a mention**: it fires on every restart including ones where
-nothing was lost, and a mention wakes the human's phone for nothing.
+Use a supervisor that tracks the manager's full session ID, not a session count or working directory. On Linux, keep its process persistent: a oneshot that launches a child daemon can kill that daemon when the check exits. Preserve the manager's identity and resume it with the runtime's supported resume command.
 
-> **Check for *your* session, not for *a* session.** Counting live background sessions
-> is only safe on a machine nobody else uses. On a shared or personal machine, record
-> the id of the session you started and check that one — otherwise the supervisor
-> believes the manager is alive because the human happens to be running something.
+The S2 implementation and verification steps are in [manager supervision](s2-manager-supervisor.md). It logs launch attempts locally; it does not post automatic restart announcements before proving recovery.
 
 > **Do not make the supervisor a `oneshot`.** A `Type=oneshot` service that launches the
 > agent and then exits takes the agent down with it: systemd tears the unit's cgroup down
@@ -311,12 +314,37 @@ Pin the adapter version deliberately.
 | mid-turn steering | no | yes |
 | standing context delivery | prepended to the first message | system prompt |
 
-Without steering, every mid-turn interruption **cancels the turn**, which invalidates
-the session. That costs, per interruption: a new session, a fresh standing-context block
-(~4,500 tokens), and an **orphaned agent runtime of ~250 MB that is never reaped**.
-Measured: 4 cancels → 3 live runtimes, none using CPU, 1.45 GB resident.
+#### S2 decision: keep interruption for now (2026-09-08)
 
-So do not poke a working worker to ask how it is going. Read its log.
+Khoi accepts the current interruption mechanism: “I'm fine with the current
+interruption mechanism.” Native steering is deferred. Keep the installed adapter
+and message-handling mode; this decision does not call for an adapter upgrade or
+a switch to queuing follow-ups.
+
+With the deployed legacy adapter, a message received during an active turn causes
+Buzz to cancel that turn and deliver the pending task together with the new
+message. Between turns, the message starts a normal next turn. Saved file changes
+remain; an unfinished reply or tool operation can be interrupted. The worker
+inspected on 2026-09-08 retained the same saved conversation across four
+interruptions, so interruption does not necessarily mean starting the task or
+conversation from scratch.
+
+`ExpectedRunIdMissing` means Buzz has neither the native run identifier nor an
+advertised steering capability for that request. It does **not** establish that
+the worker was idle; this path triggers the cancellation fallback. See the
+[transport selection](../crates/buzz-acp/src/acp.rs) and
+[cancellation/continuation handling](../crates/buzz-acp/src/pool.rs).
+
+Earlier tests on 2026-09-07 observed repeated context setup and orphaned runtimes
+(4 cancellations, 3 live runtimes, 1.45 GB resident). Those are historical
+measurements, not guaranteed costs of every interruption with the current resume
+support. Diagnose current processes before applying those numbers.
+
+If steering is revisited, first reproduce and fix the newer adapter's reply-delivery
+problem, then verify mid-turn corrections, completion-time races, session continuity,
+and sleep/resume. Native steering can itself pre-empt text generation; it does not
+promise that every running operation will finish uninterrupted. Until then,
+follow-up messages may interrupt a worker, and that tradeoff is accepted.
 
 ---
 
@@ -398,8 +426,8 @@ Four macOS-specific traps, all measured 2026-09-07:
    **Keychain**; `~/.claude/.credentials.json` does not exist. So giving the agent its
    own `CLAUDE_CONFIG_DIR` — the obvious way to keep its instructions separate — makes
    it report *"Not logged in"* while the same command on the default config dir works.
-   Share the config dir and put the agent's instructions in a plain file named in its
-   boot prompt instead. **This applies to workers too, not just the manager** — a worker
+   Share the config dir and put the agent's instructions in its own working
+   directory's auto-loaded project instructions instead. **This applies to workers too, not just the manager** — a worker
    with its own config dir fails mid-turn with `Authentication required`, which looks
    like a relay problem and is not.
    
@@ -432,7 +460,7 @@ and is enough for key generation.
 [ ] agent tails the file from a cursor, persistently
 [ ] the brief is AUTO-LOADED (a CLAUDE.md the runtime picks up), not read from the
     boot prompt — and the agent is restarted whenever the brief changes
-[ ] supervisor checks for ITS OWN session id and announces restarts without a mention
+[ ] persistent supervisor checks its recorded full manager session ID; verify recovery before claiming success
 [ ] supervisor is NOT a `oneshot` — it holds its own loop, so exiting does not kill the
     agent it just started
 [ ] after every watcher restart: identity confirmed in inbox.log (NOT watch.err), because

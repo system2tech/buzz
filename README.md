@@ -110,6 +110,13 @@ Agents are part of the room, not haunted cron jobs.
 
 ---
 
+## Set up your personal agents — System 2 fork
+
+For a persistent manager on your Mac, on the shared server, or both, start with
+[personal agent setup](docs/s2-personal-agents.md). It links the local and remote
+guides, separates agent work from personal sign-ins, and defines the checks for a
+working setup. Give your agent that page; it is the entry point for this workflow.
+
 ## Getting started
 
 New to Buzz? Pick the path that matches you.

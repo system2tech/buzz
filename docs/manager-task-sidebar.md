@@ -98,15 +98,22 @@ python3 scripts/agent-workspaces/install_reporter.py \
   --buzz /absolute/path/to/buzz
 ```
 
-On Linux run the installer as root with `--user <manager-account>`,
-`--location remote`, and that manager's actual runtime directory and working
-directory. `--prepare-only` writes reviewable files but does not start the reporter.
+New personal remote managers use the [shared manager installer](s2-personal-manager-setup.md), which installs their reporters directly. Do not run this shell-hook installer against that new runtime layout.
+
+For an existing shell-based manager on Linux, run this installer as root with `--user <manager-account>`, `--location remote`, and that manager's actual runtime and working directories. The default units are `buzz-workspace-reporter@USER.service` and `buzz-worker-supervisor@USER.service`. When updating the legacy S2 installation, preserve its existing names by adding:
+
+```text
+--service-name buzz-workspace-reporter.service \
+--supervisor-unit buzz-worker-supervisor.service
+```
+
+These are extra flags for the installer command, not a separate shell command. Use other explicit names if the installed service definitions differ. `--worker-unit-template` defaults to `buzz-worker@{slug}.service`; set it to the actual installed template when needed. `--prepare-only` writes reviewable files but does not start the reporter.
 The installer keeps exact `.before-workspace-reporter` backups of the supervisor
 and spawner, and refuses to patch unfamiliar script layouts. It reloads the
 worker supervisor before starting the reporter; existing workers continue running.
 
 The reporter service is `com.mrfix.workspace-reporter` on macOS and
-`buzz-workspace-reporter.service` on Linux. A failed publish waits 60 seconds
+`buzz-workspace-reporter@USER.service` on Linux by default; explicit legacy names remain supported. A failed publish waits 60 seconds
 before retrying that channel/identity, and never counts as a successful refresh.
 Healthy records still renew every minute and publish state transitions immediately.
 This cooldown also applies when an old worker registry entry points to a deleted

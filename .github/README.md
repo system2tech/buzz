@@ -7,6 +7,16 @@ exactly what differs from upstream and why, so tracking
 
 Our branch: `s2`.
 
+## Set up your personal agents — System 2 fork
+
+For a persistent manager on your Mac, on the shared server, or both, start with
+[personal agent setup](../docs/s2-personal-agents.md). It links the local and remote
+guides, separates agent work from personal sign-ins, and defines the checks for a
+working setup. Give your agent that page; it is the entry point for this workflow.
+
+
+**Operating the team servers or agents?** Start with [S2 operations](../docs/s2-operations.md).
+
 There are **two ways to run this**, and they differ only in which relay you talk
 to. The agent setup is identical for both, so do Part 1 either way, then pick a
 path in Part 2.

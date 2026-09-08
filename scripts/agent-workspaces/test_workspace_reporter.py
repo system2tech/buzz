@@ -68,6 +68,12 @@ class TemporaryRoot(unittest.TestCase):
 
 
 class ProcessStateTests(unittest.TestCase):
+    def test_imported_commands_force_predictable_locale(self):
+        with patch.dict(reporter.os.environ, {"LC_ALL": "fi_FI.UTF-8"}), \
+             patch.object(reporter.subprocess, "run", return_value=completed("ok")) as run:
+            reporter.command(["ps", "-o", "lstart=", "-p", "123"])
+            self.assertEqual(run.call_args.kwargs["env"]["LC_ALL"], "C")
+
     def test_launchd_running_requires_pid(self):
         run = Mock(return_value=completed("state = running\n pid = 314\n"))
         self.assertEqual(reporter.process_state("research", "darwin", run), ("running", 314))
@@ -213,6 +219,16 @@ class WorkerLifecycleTests(TemporaryRoot):
 
 
 class ManagerStateTests(TemporaryRoot):
+    def test_full_session_id_field_matches_when_display_id_is_short(self):
+        self.assertEqual(self.sessions([
+            self.session(id=SESSION[:8], sessionId=SESSION)
+        ]), "awake")
+
+    def test_same_folder_sibling_cannot_mask_missing_full_session_id(self):
+        self.assertEqual(self.sessions([
+            self.session(id="abcdef01", sessionId="abcdef01-aaaa-bbbb-cccc-123456789abc")
+        ]), "failed")
+
     def test_saved_session_and_cwd_find_manager_among_unrelated_agents(self):
         values = [
             self.session(id="unrelated", cwd="/another-project", status="busy"),
