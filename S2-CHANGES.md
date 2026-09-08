@@ -107,8 +107,8 @@ an isolated `CLAUDE_CONFIG_DIR`. Each of those cost hours.
 
 **Extended 2026-09-08** from a second deployment (the Linux agent box), still docs only.
 Four more traps, each measured rather than reasoned: a `Type=oneshot` supervisor that
-kills the session it just started, and does it every timer tick — sixteen restarts in
-thirty-two minutes, with the human's questions unanswered throughout; `whoami()` resolved
+kills the session it just started, and does it every timer tick — thirty-two restarts in
+just over an hour, with the human's questions unanswered throughout; `whoami()` resolved
 once at startup and cached, so a relay hiccup in that instant leaves the watcher echoing
 its own messages for the life of the process — and, because `refresh_membership` falls
 back to assuming membership *and* `wake_reason` has an `if not me:` branch that skips the

@@ -119,10 +119,10 @@ a message by forgetting to look back.
 > Re-arm the tail whenever you are told it stopped, and confirm against the relay rather
 > than assuming the cursor is where you left it.
 
-> **Identity is resolved once, at the worst possible moment.** `whoami()` runs at startup
-> and is cached for the life of the process. A failure there is deliberately non-fatal, so
-> the watcher carries on with "identity unknown" — and never asks again. Startup is exactly
-> when the relay is least likely to answer: after a reboot, or a restart during an outage.
+> **Identity is resolved once, at startup.** `whoami()` runs there and is cached for the
+> life of the process. A failure is deliberately non-fatal, so the watcher carries on with
+> "identity unknown" — and never asks again. Startup is when the relay is least likely to
+> answer: after a reboot, or a restart during an outage.
 > The symptom is that the agent wakes on **its own messages**, spending a turn on every
 > reply it sends.
 >
@@ -133,9 +133,15 @@ a message by forgetting to look back.
 > falls through to membership — correctly reasoned in its own comment, since with no
 > identity `my_threads` is empty by construction and every thread reply would otherwise
 > look like someone else's. Together they mean **every thread reply in every visible
-> channel wakes you, in every mode** — which is the behaviour `--subscribe all` is named
-> for. Observed 2026-09-08 under plain `joined`: a thread reply addressed to a different
-> person's agent, in a thread this manager had never posted in, arrived as `<member>`.
+> channel wakes you, under `joined` as well as `room`** — which is the behaviour
+> `--subscribe all` is named for. Observed 2026-09-08 under plain `joined`: a thread reply
+> addressed to a different person's agent, in a thread this manager had never posted in,
+> arrived as `<member>`.
+>
+> `mentions` escapes this, but only by failing in the opposite direction: it returns before
+> the fallback is reached, and the mention test above it is itself guarded by `if me:` — so
+> an unresolved identity there wakes you on nothing but DMs, silently missing real mentions.
+> Noisy in one mode, lossy in the other, from the same unresolved value.
 >
 > Each fallback is defensible on its own — noisy rather than lossy, which is exactly what
 > `whoami` promises. What is not defensible is that they are **permanent**, because the
@@ -148,8 +154,11 @@ a message by forgetting to look back.
 >
 > **Check it after every watcher restart, and look in the right file.** The banner,
 > including this warning, is written with a bare `print`, so it is on **stdout**, which the
-> unit redirects to `inbox.log`. Only the heartbeat and the BLIND/RECOVERED lines go to
-> stderr in `watch.err`. Grepping the wrong file makes a present warning look absent.
+> unit redirects to `inbox.log`. **The heartbeat is the only thing that always goes to
+> stderr.** BLIND and RECOVERED are emitted to stdout on a first onset and to stderr on
+> repeats — deliberately, so the alarm wakes you once and flapping does not — which means
+> the first alarm also lands in `inbox.log`. On this box `watch.err` has never contained
+> either. Grepping the wrong file makes a present warning look absent.
 
 ### 1.3 Giving it its instructions — read vs. loaded
 
@@ -186,7 +195,7 @@ session.** Restart it when you change what the agent is allowed to do.
 > them to. It took a second change (#2), emitting an explicit *"post top-level, do NOT use
 > `--reply-to`"*, to actually get the behaviour. Withdrawing a nudge leaves the default in
 > place. When changing an agent's behaviour by changing its inputs, name the default that
-> survives your change — if you cannot, you have removed a reason rather than made a change.
+> survives your change.
 
 ### 1.3 Staying alive
 
@@ -203,9 +212,9 @@ nothing was lost, and a mention wakes the human's phone for nothing.
 > agent and then exits takes the agent down with it: systemd tears the unit's cgroup down
 > when a completed oneshot's last process exits, so the session dies seconds after being
 > started. The timer fires again, finds no session, starts another, and kills that one too.
-> Measured 2026-09-08: **sixteen restarts in thirty-two minutes**, each announcing itself in
-> the channel, while the human's two questions sat unanswered because nothing stayed alive
-> long enough to read them. The announcements came from the supervisor script rather than
+> Measured 2026-09-08: **thirty-two restarts in just over an hour** (06:22:14 to 07:24:57),
+> each announcing itself in the channel, while the human's two questions sat unanswered
+> because nothing stayed alive long enough to read them. The announcements came from the supervisor script rather than
 > from any session, which is what made it look like an agent that kept crashing instead of a
 > supervisor that kept killing.
 >
@@ -408,7 +417,8 @@ and is enough for key generation.
 [ ] supervisor is NOT a `oneshot` — it holds its own loop, so exiting does not kill the
     agent it just started
 [ ] after every watcher restart: identity confirmed in inbox.log (NOT watch.err), because
-    an unresolved identity turns `room` into `all` for thread replies
+    an unresolved identity fans every thread reply in every visible channel into your
+    inbox — under `joined` just as much as `room`
 [ ] worker spawn: fresh key + attestation per worker, manager creates the channel,
     human as owner, worker as bot, agent-profile record published
 [ ] worker bridge: KINDS=9, CHANNELS scoped, RELAY_OBSERVER with a resolved owner,
