@@ -37,6 +37,13 @@ Rollback relay: `ssh relay 'cd /opt/buzz/deploy/compose && cp .env.before-channe
 Rollback agents bridge: `ssh agents 'ln -sf buzz-acp-resume /opt/buzz-bin/buzz-acp'`.
 Rollback Mac bridge: `cp ~/mrfix/bin/buzz-acp.bak-pre-channel-activity ~/mrfix/bin/buzz-acp && codesign --force -s - ~/mrfix/bin/buzz-acp`.
 
+Follow-up acceptance on 2026-09-08 verified live encrypted delivery and membership
+removal with real local and remote workers, plus saved-session resume. Corrected
+installed multi-user tools and both legacy launchers so new workers use manager
+signatures and sharing by default. The legacy Mac signing helper and its regression
+test live under `scripts/agent-workspaces/macos/`. Khoi confirmed the desktop
+visual check passed; see the guide for verification details and rollout backups.
+
 Enable per-worker: set `BUZZ_ACP_OBSERVER_CHANNEL_MEMBERS=true` in the worker's
 launch script. Existing workers continue with owner-only observation until opted in.
 See the [guide](docs/s2-channel-activity.md) for rollout order, acceptance checks
