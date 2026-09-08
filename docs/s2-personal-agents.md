@@ -29,7 +29,7 @@ Onboarding is incomplete until the manager supervisor is active, `.session-id` c
 | Both | Complete both guides, keeping their agent keys, channels, runtimes and saved sessions distinct |
 | An existing installation stopped working | [Operations](s2-operations.md) and [server recovery](s2-server-recovery.md) |
 
-A local manager requires its Mac to be awake and logged in. A remote manager runs on the shared server. Both can use the person's existing human Buzz identity, with separate authorized agent identities.
+A local manager requires its Mac to be awake and logged in. A remote manager runs on the shared server. Each manager joins Buzz directly with its own invite and key. The person's public key is used only to add them to the manager and worker channels; their Buzz private key is never needed.
 
 ## Instructions for the setup agent
 

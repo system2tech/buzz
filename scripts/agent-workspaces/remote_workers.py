@@ -7,9 +7,9 @@ import subprocess
 import sys
 import time
 
-from manager_common import (atomic, auth_tag, buzz, http_relay, load_json,
-                            pubkey, runtime_env, save_json, secret_key, task_slug,
-                            worker_unit)
+from manager_common import (atomic, auth_tag, buzz, http_relay, human_pubkey,
+                            load_json, pubkey, runtime_env, save_json, secret_key,
+                            task_slug, worker_unit)
 
 
 def service(action, unit, check=True):
@@ -77,7 +77,7 @@ def spawn(config, slug, task):
             worker.pop('channel_pending', None)
             save_json(metadata, worker)
         buzz(config, ['channels', 'add-member', '--channel', worker['channel'],
-                      '--pubkey', config['owner_pubkey'], '--role', 'owner'])
+                      '--pubkey', human_pubkey(config), '--role', 'owner'])
         buzz(config, ['channels', 'add-member', '--channel', worker['channel'],
                       '--pubkey', worker['pubkey'], '--role', 'bot'])
         buzz(config, ['channels', 'set-add-policy', '--policy', 'anyone'], worker)
@@ -315,7 +315,7 @@ def run_component(config, component, slug=None):
         raise ValueError('Worker registry identity mismatch')
     env = runtime_env(config, worker)
     env.update({'BUZZ_ACP_AGENT_COMMAND': tools['adapter'],
-                'BUZZ_ACP_AGENT_OWNER': config['owner_pubkey'],
+                'BUZZ_ACP_AGENT_OWNER': human_pubkey(config),
                 'BUZZ_ACP_CHANNELS': worker['channel'], 'BUZZ_ACP_SUBSCRIBE': 'all',
                 'BUZZ_ACP_KINDS': '9', 'BUZZ_ACP_CONTEXT_MESSAGE_LIMIT': '100',
                 'BUZZ_ACP_SESSION_MAP': str(root / 'workers' / f'{slug}.sessions.json'),

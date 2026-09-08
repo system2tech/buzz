@@ -28,7 +28,8 @@ class LocalTests(unittest.TestCase):
         for name in ('workers', 'plists', 'logs', 'tasks'):
             (self.root / name).mkdir()
         self.config = {'root': str(self.root), 'name': 'Person', 'channel_name': 'person-local',
-                       'manager_pubkey': 'b'*64, 'owner_pubkey': 'a'*64,
+                       'manager_pubkey': 'b'*64, 'human_pubkey': 'a'*64,
+                       'relay': 'wss://example.test',
                        'worker_idle_minutes': 3, 'worker_max_awake': 2}
 
     def test_loaded_foreign_job_is_neither_accepted_nor_stopped(self):
@@ -78,29 +79,33 @@ class LocalTests(unittest.TestCase):
         with patch.object(local.subprocess, 'run', return_value=response):
             self.assertIsNone(local.tree_cpu(10))
 
-    def test_first_time_owner_membership_failure_is_not_ready_and_reuses_channel(self):
+    def test_first_time_channel_membership_failure_is_not_ready_and_reuses_invite(self):
         local.save_json(self.root/'local.json', self.config)
+        (self.root/'.buzz-key').write_text('manager-key')
         key = SimpleNamespace(secret=b'1'*32)
         replies = [None, {'channel_id': 'retained-channel'}, RuntimeError('add failed')]
         with patch.object(local, 'secret_key', return_value=key), \
-             patch.object(local, 'pubkey', return_value='a'*64), \
-             patch.object(local, 'auth_tag', return_value=[]), \
-             patch.object(local.getpass, 'getpass', return_value='not-a-real-key'), \
+             patch.object(local, 'pubkey', return_value='b'*64), \
+             patch.object(local, 'claim_relay_invite') as claim, \
              patch.object(local, 'buzz', side_effect=replies):
             with self.assertRaises(RuntimeError):
-                local.configure(self.config, SimpleNamespace(owner_pubkey='a'*64, owner_key_file=None))
+                local.configure(self.config, SimpleNamespace(
+                    human_pubkey='a'*64, invite='invite-code', invite_file=None))
+        claim.assert_called_once_with(key, self.config['relay'], 'invite-code')
         saved = local.load_json(self.root/'local.json')
         self.assertEqual(saved['channel'], 'retained-channel')
+        self.assertEqual(saved['relay_membership'], 'invite')
         self.assertFalse(saved.get('configured', False))
         with patch.object(local, 'secret_key', return_value=key), \
-             patch.object(local, 'pubkey', return_value='a'*64), \
-             patch.object(local, 'auth_tag', return_value=[]), \
-             patch.object(local.getpass, 'getpass', return_value='not-a-real-key'), \
+             patch.object(local, 'pubkey', return_value='b'*64), \
+             patch.object(local, 'claim_relay_invite') as claim, \
              patch.object(local, 'buzz', side_effect=[
                  {}, {}, [{'channel_id': 'coordination', 'name': 'agent-managers',
                            'visibility': 'public'}], {}
              ]) as buzz:
-            local.configure(saved, SimpleNamespace(owner_pubkey='a'*64, owner_key_file=None))
+            local.configure(saved, SimpleNamespace(
+                human_pubkey='a'*64, invite=None, invite_file=None))
+        claim.assert_not_called()
         self.assertFalse(any(c.args[1][:2] == ['channels','create'] for c in buzz.call_args_list))
         configured = local.load_json(self.root/'local.json')
         self.assertTrue(configured['configured'])
@@ -133,7 +138,7 @@ class LocalTests(unittest.TestCase):
         self.assertNotIn('CLAUDE_CONFIG_DIR',env)
         self.assertEqual(env['HOME'], str(Path.home()))
         self.assertEqual(env['MRFIX_ROOT'],str(self.root))
-        self.assertEqual(env['BUZZ_AUTH_TAG'],'[]')
+        self.assertNotIn('BUZZ_AUTH_TAG', env)
 
     def test_local_restart_stops_only_the_saved_manager_session(self):
         session_id = '12345678-1234-4234-8234-123456789abc'

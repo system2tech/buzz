@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Prepare, configure and operate independent personal Buzz managers."""
 import argparse
-import getpass
 import fcntl
 import json
 import os
@@ -12,9 +11,10 @@ import shutil
 import subprocess
 import sys
 
-from manager_common import (COORDINATION_CHANNEL_NAME, REGISTRY, HEX, account_name,
-                            as_user, atomic, auth_tag, buzz, config_for, exact_channel_id,
-                            load_json, mint_pair, paths, pubkey, relay_url, save_json,
+from manager_common import (COORDINATION_CHANNEL_NAME, REGISTRY, account_name,
+                            as_user, atomic, buzz, claim_relay_invite, config_for,
+                            exact_channel_id, human_pubkey, load_json, mint_pair,
+                            paths, pubkey, relay_url, save_json,
                             saved_manager_session_id, secret_key, services)
 
 
@@ -158,7 +158,7 @@ def initialize(args):
         link = root / 'bin' / name
         if not link.exists() and not link.is_symlink():
             link.symlink_to(target)
-    # These wrappers carry no credentials. All runtime reads happen as the owner.
+    # These wrappers carry no credentials. All runtime reads happen as this account.
     for name, operation in [('spawn-worker.sh', 'spawn'), ('reap-worker.sh', 'retire')]:
         target = root / name
         if not target.exists():
@@ -170,7 +170,6 @@ def initialize(args):
                'export MRFIX_ROOT="$HOME/mrfix"\nexport MRFIX_MANAGER_CWD="$MRFIX_ROOT/manager"\n'
                'export BUZZ_PRIVATE_KEY="$(cat "$MRFIX_ROOT/.buzz-key")"\n'
                'export BUZZ_RELAY_URL="$(python3 -c \'import json,os; print(json.load(open(os.path.expanduser("~/mrfix/manager.json")))["relay"])\')"\n'
-               'export BUZZ_AUTH_TAG="$(python3 -c \'import json,os; print(json.dumps(json.load(open(os.path.expanduser("~/mrfix/manager.json"))).get("auth_tag",[])))\')"\n'
                'export BUZZ_CHANNEL="$(python3 -c \'import json,os; print(json.load(open(os.path.expanduser("~/mrfix/manager.json"))).get("channel",""))\')"\n')
     instructions = root / 'manager' / 'CLAUDE.md'
     if not instructions.exists():
@@ -180,7 +179,7 @@ def initialize(args):
 @{home}/mr-fix/CLAUDE.md
 
 You are this person's Mr. Fix manager on the shared agent server. Your own runtime
-is {root}; your manager channel and owner identity are in manager.json there.
+is {root}; your manager channel and human participant are in manager.json there.
 Source {root}/env.sh for Buzz commands. Never use another account's identity.
 
 Your shared coordination channel is `#agent-managers`, recorded as
@@ -229,18 +228,22 @@ def configure_locked(args):
     user = pwd.getpwuid(os.geteuid()).pw_name
     config = config_for(user)
     root = Path(config['root'])
-    if not HEX.fullmatch(args.owner_pubkey):
-        raise ValueError('Owner public key must be 64 lowercase hex characters')
-    if config.get('owner_pubkey') and config['owner_pubkey'] != args.owner_pubkey:
-        raise ValueError('Owner identity is already configured; do not replace it through onboarding')
-    raw = (Path(args.owner_key_file).read_text() if args.owner_key_file
-           else getpass.getpass('Your Buzz secret key (hidden; used once to authorize your manager): '))
-    owner = secret_key(raw)
-    if pubkey(owner) != args.owner_pubkey:
-        raise ValueError('Secret key does not match the specified owner public key')
-    tag = auth_tag(owner, config['manager_pubkey'])
-    config.update(owner_pubkey=args.owner_pubkey, auth_tag=tag)
-    # Authorize the fresh manager before channel creation so ownership is recorded.
+    previous_human = config.get('human_pubkey') or config.get('owner_pubkey')
+    if previous_human and previous_human != args.human_pubkey:
+        raise ValueError('Existing human participant differs; refusing an identity replacement')
+    if config.get('auth_tag') or config.get('owner_pubkey'):
+        raise ValueError('Existing owned manager requires explicit migration; configure will not alter it')
+    manager = secret_key((root / '.buzz-key').read_text())
+    if pubkey(manager) != config['manager_pubkey']:
+        raise ValueError('Stored manager signing identity differs')
+    config['human_pubkey'] = args.human_pubkey
+    human_pubkey(config)
+    if not config.get('relay_membership'):
+        raw_invite = (Path(args.invite_file).read_text() if args.invite_file
+                      else args.invite or input('Buzz relay invite link or code: '))
+        claim_relay_invite(manager, config['relay'], raw_invite)
+        config['relay_membership'] = 'invite'
+        save_json(root / 'manager.json', config)
     buzz(config, ['users', 'set-profile', '--name', f"{config['name']} Mr. Fix",
                   '--about', f"Personal remote manager for {config['name']}"])
     save_json(root / 'manager.json', config)
@@ -259,7 +262,7 @@ def configure_locked(args):
         # Save immediately so an add-member failure cannot create a duplicate on retry.
         save_json(root / 'manager.json', config)
     buzz(config, ['channels', 'add-member', '--channel', config['channel'],
-                  '--pubkey', args.owner_pubkey, '--role', 'owner'])
+                  '--pubkey', args.human_pubkey, '--role', 'owner'])
     coordination = exact_channel_id(
         buzz(config, ['channels', 'search', '--query', COORDINATION_CHANNEL_NAME, '--exact']))
     buzz(config, ['channels', 'join', '--channel', coordination])
@@ -275,10 +278,12 @@ def status_one(user):
         return {'user': user, 'layout': 'legacy', 'detail': 'Inspect retained service definitions'}
     config = config_for(user)
     ssh_keys = Path(account.pw_dir) / '.ssh/authorized_keys'
+    direct = config.get('relay_membership') == 'invite' and config.get('human_pubkey')
+    legacy_owned = config.get('owner_pubkey') and config.get('auth_tag')
     checks = {'ssh_public_key': ssh_keys.is_file() and ssh_keys.stat().st_size > 0,
               'brain_checkout': (Path(account.pw_dir) / 'mr-fix/CLAUDE.md').is_file(),
-              'buzz_identity': bool(config.get('configured') and config.get('owner_pubkey')
-                                    and config.get('channel') and config.get('auth_tag')
+              'buzz_identity': bool(config.get('configured') and config.get('channel')
+                                    and (direct or legacy_owned)
                                     and (root / '.buzz-key').is_file()),
               'coordination_channel': bool(config.get('coordination_channel')),
               'claude_login': False}
@@ -395,9 +400,11 @@ def main():
     init = sub.add_parser('initialize', help=argparse.SUPPRESS)
     init.add_argument('--name', required=True)
     init.add_argument('--relay', required=True)
-    conf = sub.add_parser('configure', help='Personal account: authorize its Buzz identity and channel')
-    conf.add_argument('--owner-pubkey', required=True)
-    conf.add_argument('--owner-key-file')
+    conf = sub.add_parser('configure', help='Personal account: join Buzz and create its channel')
+    conf.add_argument('--human-pubkey', required=True)
+    invite = conf.add_mutually_exclusive_group()
+    invite.add_argument('--invite')
+    invite.add_argument('--invite-file')
     for command in ('status', 'start', 'stop'):
         item = sub.add_parser(command)
         group = item.add_mutually_exclusive_group()

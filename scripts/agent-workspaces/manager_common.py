@@ -1,4 +1,5 @@
 """Shared paths, identity signing and checked CLI calls for personal managers."""
+import base64
 import hashlib
 import json
 import os
@@ -6,13 +7,17 @@ from pathlib import Path
 import pwd
 import re
 import subprocess
+import time
 import uuid
-from urllib.parse import urlsplit
+from urllib.error import HTTPError, URLError
+from urllib.parse import unquote, urlsplit
+from urllib.request import Request, urlopen
 
 REGISTRY = Path('/etc/buzz-managers')
 USER = re.compile(r'[a-z][a-z0-9_-]{0,30}\Z')
 SLUG = re.compile(r'[a-z0-9][a-z0-9-]{0,63}\Z')
 HEX = re.compile(r'[a-f0-9]{64}\Z')
+INVITE_CODE = re.compile(r'[A-Za-z0-9._~-]{8,512}\Z')
 COORDINATION_CHANNEL_NAME = 'agent-managers'
 
 
@@ -108,6 +113,63 @@ def relay_url(value):
 
 def http_relay(value):
     return value.replace('wss://', 'https://', 1).replace('ws://', 'http://', 1)
+
+
+def relay_invite_code(value, relay):
+    """Accept a relay invite code or an invite URL for this exact relay."""
+    value = value.strip()
+    if '://' in value:
+        parsed = urlsplit(value)
+        expected = urlsplit(http_relay(relay_url(relay)))
+        if (parsed.scheme not in ('http', 'https') or parsed.username or parsed.password
+                or parsed.query or parsed.fragment or parsed.netloc.casefold() != expected.netloc.casefold()):
+            raise ValueError('Invite link must belong to the configured relay origin')
+        match = re.fullmatch(r'/invite/([^/]+)/?', parsed.path)
+        if not match:
+            raise ValueError('Invite link must use the relay /invite/CODE path')
+        value = unquote(match.group(1))
+    if not INVITE_CODE.fullmatch(value):
+        raise ValueError('Invite code is malformed')
+    return value
+
+
+def claim_relay_invite(key, relay, invite, timeout=20):
+    """Claim direct relay membership with a NIP-98 request signed by `key`."""
+    code = relay_invite_code(invite, relay)
+    url = http_relay(relay_url(relay)).rstrip('/') + '/api/invites/claim'
+    body = json.dumps({'code': code}, separators=(',', ':'))
+    created_at = int(time.time())
+    tags = [['u', url], ['method', 'POST'],
+            ['payload', hashlib.sha256(body.encode()).hexdigest()],
+            ['nonce', str(uuid.uuid4())]]
+    public = pubkey(key)
+    serialized = json.dumps([0, public, created_at, 27235, tags, ''],
+                            separators=(',', ':'), ensure_ascii=False)
+    event_id = hashlib.sha256(serialized.encode()).hexdigest()
+    event = {'id': event_id, 'pubkey': public, 'created_at': created_at, 'kind': 27235,
+             'tags': tags, 'content': '', 'sig': key.sign_schnorr(bytes.fromhex(event_id)).hex()}
+    authorization = 'Nostr ' + base64.b64encode(
+        json.dumps(event, separators=(',', ':')).encode()).decode()
+    request = Request(url, data=body.encode(), method='POST', headers={
+        'Authorization': authorization, 'Content-Type': 'application/json'})
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            result = json.loads(response.read())
+    except HTTPError as error:
+        raise RuntimeError(f'Relay invite was rejected (HTTP {error.code})') from error
+    except (URLError, TimeoutError, json.JSONDecodeError) as error:
+        raise RuntimeError('Relay invite claim failed') from error
+    if result.get('status') not in ('joined', 'already_member') or result.get('role') != 'member':
+        raise RuntimeError('Relay returned an invalid invite-claim response')
+    return result
+
+
+def human_pubkey(config):
+    """Human channel participant; legacy owned-manager configs use owner_pubkey."""
+    value = config.get('human_pubkey') or config.get('owner_pubkey')
+    if not isinstance(value, str) or not HEX.fullmatch(value):
+        raise ValueError('Human public key is missing or invalid')
+    return value
 
 
 def clean_env(user):
@@ -214,8 +276,9 @@ def runtime_env(config, worker=None):
         tag = config.get('auth_tag', [])
         channel = config.get('channel', '')
     env.update({'BUZZ_PRIVATE_KEY': keyfile.read_text().strip(),
-                'BUZZ_AUTH_TAG': json.dumps(tag, separators=(',', ':')),
                 'BUZZ_CHANNEL': channel})
+    if tag:
+        env['BUZZ_AUTH_TAG'] = json.dumps(tag, separators=(',', ':'))
     return env
 
 

@@ -6,7 +6,7 @@ S2's infrastructure 2026-09-05 → 09-07; every gotcha below cost real time.
 
 **This is not [`remote-agents.md`](remote-agents.md).** That specifies the provider
 protocol by which Buzz Desktop *delegates* a managed agent to a remote substrate. This
-document does the opposite: the agents here are **plain relay members**, owned by you
+document does the opposite: the managers here are **plain relay members**, operated by you
 but not spawned or supervised by your desktop. Nothing in the Agents tab creates them,
 and the desktop never needs to be running.
 
@@ -17,7 +17,7 @@ agent."*
 
 ## First-time setup for a team
 
-Use [personal remote-manager setup](s2-personal-manager-setup.md) for the copyable operator, personal sign-in and self-service steps. Any team member with root access can prepare everyone's accounts, grant their SSH access and start their configured managers. Each person's Claude login, project access and Buzz owner authorization must still be established under their own account.
+Use [personal remote-manager setup](s2-personal-manager-setup.md) for the copyable operator, personal sign-in and self-service steps. Any team member with root access can prepare everyone's accounts, grant their SSH access and start their configured managers. Each person's Claude login and project access still belong to that person. A Buzz owner or admin supplies a normal unused relay invite.
 
 The shared `buzz-manager` tooling uses per-user services, paths and worker names. Preparation does not mean the manager is running: use its status report to identify missing personal authorization, then verify channel replies and worker sleep/wake after startup. Existing legacy managers keep their installed services until an explicit migration; do not use the older fixed-name reporter installer for new team accounts.
 
@@ -60,36 +60,26 @@ panel until its reply lands.
 ### 1.1 Identity, and how to get it onto a closed relay
 
 The manager needs its own keypair. If your relay requires membership
-(`BUZZ_REQUIRE_RELAY_MEMBERSHIP=true`), a fresh key is not a member and cannot post.
-
-**Do not pre-admit it from the relay side.** Admit it through a **NIP-OA attestation**
-instead: your own key signs "this pubkey is my agent", the agent carries that signature
-on every event, and the relay verifies it and admits the agent through you.
+(`BUZZ_REQUIRE_RELAY_MEMBERSHIP=true`), admit it directly with a normal relay invite,
+just like a human teammate. Publish its profile without a NIP-OA owner tag. Buzz then
+treats the persistent manager as a searchable relay user, so other humans can open a DM
+with it. The manager's local watcher and instructions decide which messages it acts on.
 
 ```bash
 # 32 random bytes is the private key; the Nostr pubkey is the X coordinate.
 openssl ecparam -name secp256k1 -genkey -noout | openssl ec -text -noout
 ```
 
-Then sign the attestation with the owner key — see `compute_auth_tag` in
-[`crates/buzz-sdk/src/nip_oa.rs`](../crates/buzz-sdk/src/nip_oa.rs). The preimage is
-`nostr:agent-auth:<agent pubkey>:<conditions>` hashed with SHA-256 and signed BIP-340;
-the tag is `["auth", <owner pubkey>, <conditions>, <sig>]`. Conditions may be empty.
+The manager still signs NIP-OA attestations for the task workers it creates. That is the
+single useful ownership edge: the direct relay-member manager authorizes its workers,
+while the manager itself stays an ordinary relay identity. Workers remain marked as bots,
+retain scoped response controls, and publish encrypted activity to channel members.
 
-Export it as `BUZZ_AUTH_TAG` and the CLI attaches it to everything it signs
-([`crates/buzz-cli/src/lib.rs`](../crates/buzz-cli/src/lib.rs), `--auth-tag`).
-
-> **The trap that will cost you a day.** `check_relay_membership`
-> ([`crates/buzz-relay/src/api/mod.rs`](../crates/buzz-relay/src/api/mod.rs)) returns on
-> its **first** hit: if the key is already a relay member it never reads the attestation,
-> so `users.agent_owner_pubkey` is never written — and without that column the relay
-> **rejects every observer frame** with `restricted: observer frame is not authorized for
-> this agent owner`. A pre-admitted key therefore silently disables the live activity
-> panel it was supposed to enable. Use keys the relay has never seen.
-
-**Sign the attestation where the owner key already lives.** Generate the keypair on the
-target machine, send only the *public* key to wherever the owner key is, and bring back
-the tag. The owner key never needs to travel.
+This deliberately diverges from Buzz Desktop's managed-agent model. Applying a human
+owner tag to an externally supervised manager makes Desktop hide it from people who are
+not that exact owner key unless a separate agent-directory policy is also published. A
+real invite test on 2026-09-09 confirmed that the direct, unowned manager profile is
+searchable and messageable from a non-admin member account.
 
 ### 1.2 Hearing
 
@@ -457,7 +447,7 @@ and is enough for key generation.
 
 ```
 [ ] relay reachable; note whether it requires membership
-[ ] manager keypair minted, attestation signed by the owner key (owner key stays put)
+[ ] manager keypair minted; manager joined directly with an unused relay invite
 [ ] personal manager channel created, human added
 [ ] manager joined to the single active open #agent-managers coordination channel
 [ ] watcher running under the service manager, appending to a file, liveness on stderr

@@ -70,24 +70,35 @@ class MultiUserTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'must exist exactly once'):
                 common.exact_channel_id(rows)
 
+    def test_invite_code_accepts_only_the_configured_relay(self):
+        relay = 'wss://buzz.example.test'
+        self.assertEqual(common.relay_invite_code('v2.test-code', relay), 'v2.test-code')
+        self.assertEqual(common.relay_invite_code(
+            'https://buzz.example.test/invite/v2.test-code', relay), 'v2.test-code')
+        with self.assertRaisesRegex(ValueError, 'configured relay'):
+            common.relay_invite_code(
+                'https://other.example.test/invite/v2.test-code', relay)
+
     def test_configuration_joins_required_coordination_channel(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            config = {'root': directory, 'name': 'Test', 'manager_pubkey': 'b'*64}
+            config = {'root': directory, 'name': 'Test', 'manager_pubkey': 'b'*64,
+                      'relay': 'wss://buzz.example.test'}
+            (root / '.buzz-key').write_text('manager-key')
             key = SimpleNamespace(secret=b'x'*32)
-            args = SimpleNamespace(owner_pubkey='a'*64, owner_key_file=None)
+            args = SimpleNamespace(human_pubkey='a'*64, invite='v2.test-code', invite_file=None)
             replies = [{}, {'id': 'personal'}, {},
                        [{'channel_id': 'coordination', 'name': 'agent-managers',
                          'visibility': 'public'}], {}]
             with patch.object(setup.os, 'geteuid', return_value=1000), \
                  patch.object(setup.pwd, 'getpwuid', return_value=SimpleNamespace(pw_name='harri')), \
                  patch.object(setup, 'config_for', return_value=dict(config)), \
-                 patch.object(setup.getpass, 'getpass', return_value='hidden'), \
                  patch.object(setup, 'secret_key', return_value=key), \
-                 patch.object(setup, 'pubkey', return_value='a'*64), \
-                 patch.object(setup, 'auth_tag', return_value=[]), \
+                 patch.object(setup, 'pubkey', return_value='b'*64), \
+                 patch.object(setup, 'claim_relay_invite') as claim, \
                  patch.object(setup, 'buzz', side_effect=replies) as buzz:
                 setup.configure_locked(args)
+            claim.assert_called_once_with(key, config['relay'], args.invite)
             saved = common.load_json(root / 'manager.json')
             self.assertEqual(saved['channel'], 'personal')
             self.assertEqual(saved['coordination_channel'], 'coordination')
@@ -270,7 +281,7 @@ class MultiUserTests(unittest.TestCase):
             (root / '.buzz-key').write_text('manager')
             key = SimpleNamespace(secret=b'x'*32)
             config = {'root': directory, 'manager_pubkey': 'manager-pub',
-                      'owner_pubkey': 'human-pub', 'name': 'Test'}
+                      'human_pubkey': 'human-pub', 'name': 'Test'}
             with patch.dict(sys.modules, {'coincurve': SimpleNamespace(PrivateKey=lambda: key)}), \
                  patch.object(workers, 'secret_key', side_effect=lambda value: value), \
                  patch.object(workers, 'pubkey', side_effect=lambda value: 'manager-pub' if value == 'manager' else 'worker-pub'), \
@@ -302,25 +313,28 @@ class MultiUserTests(unittest.TestCase):
                     workers.spawn(config, 'research', 'test')
                 buzz.assert_not_called()
 
-    def test_failed_owner_membership_stays_pending_and_retries_same_channel(self):
+    def test_failed_human_channel_membership_stays_pending_and_keeps_invite_claim(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            config = {'root': directory, 'name': 'Test', 'manager_pubkey': 'b'*64}
+            config = {'root': directory, 'name': 'Test', 'manager_pubkey': 'b'*64,
+                      'relay': 'wss://buzz.example.test'}
+            (root / '.buzz-key').write_text('manager-key')
             key = SimpleNamespace(secret=b'x'*32)
-            args = SimpleNamespace(owner_pubkey='a'*64, owner_key_file=None)
+            args = SimpleNamespace(human_pubkey='a'*64, invite='v2.test-code', invite_file=None)
             with patch.object(setup.os, 'geteuid', return_value=1000), \
                  patch.object(setup.pwd, 'getpwuid', return_value=SimpleNamespace(pw_name='harri')), \
                  patch.object(setup, 'config_for', side_effect=lambda user: dict(config)), \
-                 patch.object(setup.getpass, 'getpass', return_value='hidden'), \
                  patch.object(setup, 'secret_key', return_value=key), \
-                 patch.object(setup, 'pubkey', return_value='a'*64), \
-                 patch.object(setup, 'auth_tag', return_value=[]), \
+                 patch.object(setup, 'pubkey', return_value='b'*64), \
+                 patch.object(setup, 'claim_relay_invite') as claim, \
                  patch.object(setup, 'buzz', side_effect=[{}, {'id': 'saved-channel'}, RuntimeError('membership failed')]):
                 with self.assertRaisesRegex(RuntimeError, 'membership failed'):
                     setup.configure_locked(args)
+            claim.assert_called_once_with(key, config['relay'], args.invite)
             saved = common.load_json(root / 'manager.json')
             self.assertFalse((root / '.owner-key').exists())
             self.assertEqual(saved['channel'], 'saved-channel')
+            self.assertEqual(saved['relay_membership'], 'invite')
             self.assertFalse(saved.get('configured', False))
             self.assertFalse(saved.get('channel_pending', False))
 
@@ -342,7 +356,7 @@ class MultiUserTests(unittest.TestCase):
             common.save_json(w / 'research.json', {'slug': 'research', 'state': 'active',
                                                   'channel': 'channel-harri'})
             (w / 'research.busy').write_text('1')
-            config = {'root': str(root), 'user': 'harri', 'owner_pubkey': 'a'*64,
+            config = {'root': str(root), 'user': 'harri', 'human_pubkey': 'a'*64,
                       'prefix': '/opt/buzz-manager',
                       'tools': {'adapter': '/opt/adapter', 'bridge': '/opt/bridge'}}
             with patch.object(workers, 'runtime_env', return_value={'HOME': '/home/harri'}), \

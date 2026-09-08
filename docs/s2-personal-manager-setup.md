@@ -1,10 +1,10 @@
 # Set up your personal remote manager
 
-Any team member with root access can prepare accounts and start everyone's configured managers. Each manager runs as its own Linux user and uses that person's Claude login, Buzz identity and project access. Everyone has the same server administration privileges.
+Any team member with root access can prepare accounts and start everyone's configured managers. Each manager runs as its own Linux user, uses that person's Claude login and project access, and keeps its own Buzz relay identity. Everyone has the same server administration privileges.
 
 For local setup or both locations, start with [personal agents](s2-personal-agents.md). This page configures the shared Linux server.
 
-There are two stages: **prepared** means the account and runtime exist; **running and verified** means personal authorization is complete and the manager can answer and run task workers. Preparing an account alone does not complete onboarding.
+There are two stages: **prepared** means the account and runtime exist; **running and verified** means personal login and relay membership are complete and the manager can answer and run task workers. Preparing an account alone does not complete onboarding.
 
 ## 1. Prepare the account — a root operator or their agent
 
@@ -93,7 +93,7 @@ sudo -n true
 
 ## 3. Complete personal authorization
 
-Your agent can run checks and finish configuration. You complete interactive provider sign-in and supply your own authorization in a private terminal. Root access to the server does not provide access to your Claude subscription, GitHub account or Buzz identity.
+Your agent can run checks and finish configuration. You complete interactive provider sign-in and obtain an unused Buzz invite from a workspace owner or admin. Root access to the server does not provide access to your Claude subscription or GitHub account.
 
 ### Claude login — human sign-in, agent verification
 
@@ -142,34 +142,33 @@ Verify GitHub's host fingerprint using its [official fingerprint list](https://d
 
 Keep an existing checkout and its changes. The manager runs from `~/mrfix/manager`, with per-person standing instructions that import the shared `~/mr-fix/CLAUDE.md`. Inspect them before starting: they must identify you, your account and your channel. The setup leaves global Claude identity instructions untouched. A shared company-memory checkout does not authorize copying another person's local identity files or tokens.
 
-### Buzz ownership — your own identity
+### Buzz membership and your public identity
 
-Use the identity with which you joined the team's Buzz community. The manager gets its own agent key and a signed authorization from your human identity; it should appear as **your** manager. A newly generated unrelated human identity is not a substitute.
+The manager uses its own retained key and joins the relay directly through a normal invite. It publishes no human-owner attestation, so Buzz treats it as a searchable relay user. Your public key is used only to add you to the private manager and worker channels.
 
 **Human — in your Buzz desktop app:**
 
 1. Select the team's community and check that you are using your usual personal identity.
 2. Open **Settings → Profile → Identity → Identity details**.
 3. Beside **Public key**, use the copy button. It copies the full public key in hex; use it for the public-key prompt below.
-4. At **Private key**, click **Reveal**, then open the key's **…** menu and choose **Copy**. This copies an `nsec1…` signing key. Paste it only when the setup command asks for the hidden secret, in your own terminal. The initial **Reveal** expands the row; you do not need to expose the key text for a screenshot.
-5. Hide the key again and replace the clipboard contents after setup. An encrypted backup download is a different format; do not paste that backup into this prompt.
+4. Do not reveal or copy the private key. Manager setup does not need it.
 
-**Agent:** open the command in the person's interactive terminal and let them enter the secret directly. Do not request a screenshot of the revealed key, read the clipboard, or capture the secret in a tool call/transcript. If the controls differ in their app build, inspect its version and matching source with the key hidden. A user unable to access their existing key must restore their identity through Buzz's own recovery flow; do not generate a replacement identity to bypass this step.
+**Agent:** ask a Buzz owner or admin for one unused invite link. The person may paste it into their private terminal when `configure` prompts. Do not post an unused invite in a channel or commit it to a repository. A consumed invite is not retained by the manager configuration.
 
-The labels and copy formats above were checked against this fork's [profile controls](../desktop/src/features/settings/ui/ProfileSettingsCard.tsx), [private-key row](../desktop/src/features/settings/ui/PrivateKeyBackupRow.tsx), and [copy menu](../desktop/src/features/onboarding/ui/NsecMaskedDisplay.tsx). Full first-time authorization still needs the person's participation.
+The public-key label above was checked against this fork's [profile controls](../desktop/src/features/settings/ui/ProfileSettingsCard.tsx).
 
 As the personal Linux account, in that private terminal:
 
 ```bash
-printf 'Your existing Buzz owner public key (hex): '
-IFS= read -r OWNER_PUBKEY
-/opt/buzz-manager/bin/buzz-manager configure --owner-pubkey "$OWNER_PUBKEY"
+printf 'Your Buzz public key (hex): '
+IFS= read -r HUMAN_PUBKEY
+/opt/buzz-manager/bin/buzz-manager configure --human-pubkey "$HUMAN_PUBKEY"
 /opt/buzz-manager/bin/buzz-manager status
 ```
 
-`configure` asks for your private signing key through a hidden terminal prompt, verifies it against your public key, and configures your manager and personal channel. It also finds the single active open `#agent-managers` channel by name and joins the manager to it; setup stops if that channel is missing or ambiguous. No channel ID is hard-coded. Never paste the private key into an agent conversation or channel. If it is already in a private file, add `--owner-key-file "$OWNER_KEY_FILE"`, where that variable contains only the file path.
+`configure` asks for the relay invite, claims it with the manager's own key, creates the personal channel, adds your public identity as an owner, and joins the manager to the single active open `#agent-managers` channel. Setup stops if that channel is missing or ambiguous. No channel ID is hard-coded. For unattended setup, put only the invite link in a temporary private file and add `--invite-file "$INVITE_FILE"`; remove that file after a successful claim.
 
-The command uses your signing key once to authorize the manager and saves only that signed authorization. New workers are authorized with the manager's own key; your private key is not saved. The relay permits one worker generation beneath a directly human-authorized manager, provided that human is still a relay member. Workers cannot recursively delegate through that chain. Existing worker identities and authorizations stay unchanged. If you cannot access your Buzz key, report that specific blocker. Existing `.owner-key` files are preserved: remove one only after verifying the updated installation can create a worker without reading it and checking no legacy tool still needs it.
+The manager is a direct relay member and remains discoverable to other humans. New workers are authorized with the manager's own key; your private key is never read or saved. Existing owned-manager installations remain supported and are not changed automatically. Migrate one only after preserving its key, channel, session ID and worker registry, then verify a real manager reply and worker spawn.
 
 ## 4. Start and verify — you or any root operator
 
@@ -188,7 +187,7 @@ Or, as root, inspect and start all prepared accounts:
 /opt/buzz-manager/bin/buzz-manager status --all
 ```
 
-Resolve each missing prerequisite shown by `status`. An account waiting for login or ownership authorization remains pending, even if other people are ready. Check legacy managers separately using [server recovery](s2-server-recovery.md); they are not automatically migrated into this tool's inventory.
+Resolve each missing prerequisite shown by `status`. An account waiting for login or relay invitation remains pending, even if other people are ready. Check legacy managers separately using [server recovery](s2-server-recovery.md); they are not automatically migrated into this tool's inventory.
 
 For each ready account, verify:
 

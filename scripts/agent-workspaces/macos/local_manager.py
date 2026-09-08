@@ -2,7 +2,6 @@
 """Personal macOS Buzz manager, using user LaunchAgents and retained identities."""
 import argparse
 import fcntl
-import getpass
 import json
 import os
 from pathlib import Path
@@ -13,7 +12,8 @@ import subprocess
 import sys
 import time
 
-from manager_common import (COORDINATION_CHANNEL_NAME, atomic, auth_tag, exact_channel_id,
+from manager_common import (COORDINATION_CHANNEL_NAME, atomic, auth_tag,
+                            claim_relay_invite, exact_channel_id, human_pubkey,
                             load_json, mint_pair, pubkey, save_json,
                             saved_manager_session_id, secret_key, task_slug)
 
@@ -33,9 +33,11 @@ def environment(config, worker=None):
                MRFIX_ROOT=str(root), MRFIX_MANAGER_CWD=str(root / 'manager'),
                BUZZ_RELAY_URL=config['relay'], BUZZ_CLI=config['tools']['buzz'])
     key = root / '.buzz-key' if worker is None else root / 'workers' / (worker['slug'] + '.key')
+    record = worker or config
     env.update(BUZZ_PRIVATE_KEY=key.read_text().strip(),
-               BUZZ_AUTH_TAG=json.dumps((worker or config).get('auth_tag', [])),
-               BUZZ_CHANNEL=(worker or config).get('channel', ''))
+               BUZZ_CHANNEL=record.get('channel', ''))
+    if record.get('auth_tag'):
+        env['BUZZ_AUTH_TAG'] = json.dumps(record['auth_tag'])
     return env
 
 
@@ -133,21 +135,29 @@ def configure(config, args):
     with (root / '.configure.lock').open('a') as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         config = load_json(root / 'local.json')
-        if config.get('owner_pubkey') and config['owner_pubkey'] != args.owner_pubkey:
-            raise ValueError('Existing owner differs; refusing an identity replacement')
-        raw = Path(args.owner_key_file).read_text() if args.owner_key_file else getpass.getpass(
-            'Your Buzz private key (hidden; used once to authorize your manager): ')
-        key = secret_key(raw)
-        if pubkey(key) != args.owner_pubkey:
-            raise ValueError('Private key does not match the supplied public key')
-        config.update(owner_pubkey=args.owner_pubkey, auth_tag=auth_tag(key, config['manager_pubkey']))
+        previous_human = config.get('human_pubkey') or config.get('owner_pubkey')
+        if previous_human and previous_human != args.human_pubkey:
+            raise ValueError('Existing human participant differs; refusing an identity replacement')
+        if config.get('auth_tag') or config.get('owner_pubkey'):
+            raise ValueError('Existing owned manager requires explicit migration; configure will not alter it')
+        key = secret_key((root / '.buzz-key').read_text())
+        if pubkey(key) != config['manager_pubkey']:
+            raise ValueError('Stored manager signing identity differs')
+        config['human_pubkey'] = args.human_pubkey
+        human_pubkey(config)
+        if not config.get('relay_membership'):
+            raw_invite = (Path(args.invite_file).read_text() if args.invite_file
+                          else args.invite or input('Buzz relay invite link or code: '))
+            claim_relay_invite(key, config['relay'], raw_invite)
+            config['relay_membership'] = 'invite'
+            save_json(root / 'local.json', config)
         buzz(config, ['users', 'set-profile', '--name', config['name'] + ' Mr. Fix',
                       '--about', 'Personal local manager'])
         save_json(root / 'local.json', config)
         checked_channel_create(config, config, root / 'local.json', config['channel_name'],
                                config['name'] + "'s local manager")
         buzz(config, ['channels', 'add-member', '--channel', config['channel'],
-                      '--pubkey', args.owner_pubkey, '--role', 'owner'])
+                      '--pubkey', args.human_pubkey, '--role', 'owner'])
         coordination = exact_channel_id(
             buzz(config, ['channels', 'search', '--query', COORDINATION_CHANNEL_NAME, '--exact']))
         buzz(config, ['channels', 'join', '--channel', coordination])
@@ -165,9 +175,11 @@ def status(config):
         logged_in = auth.returncode == 0 and json.loads(auth.stdout).get('loggedIn') is True
     except ValueError:
         logged_in = False
+    direct = config.get('relay_membership') == 'invite' and config.get('human_pubkey')
+    legacy_owned = config.get('owner_pubkey') and config.get('auth_tag')
     checks = {'claude_login': logged_in, 'brain': (Path(config['brain']) / 'CLAUDE.md').is_file(),
               'buzz_identity': bool(config.get('configured') and config.get('channel')
-                                    and config.get('auth_tag') and (root / '.buzz-key').is_file()),
+                                    and (direct or legacy_owned) and (root / '.buzz-key').is_file()),
               'coordination_channel': bool(config.get('coordination_channel'))}
     states = {name: inspect_job(config, name) for name in LABELS}
     exact = False
@@ -272,7 +284,7 @@ def spawn(config, slug, task):
             save_json(target, record)
         buzz(config, ['users', 'set-profile', '--name', 'task-' + slug], record)
         checked_channel_create(config, record, target, 'task-' + slug, task)
-        for identity, role in [(config['owner_pubkey'], 'owner'), (record['pubkey'], 'bot')]:
+        for identity, role in [(human_pubkey(config), 'owner'), (record['pubkey'], 'bot')]:
             buzz(config, ['channels', 'add-member', '--channel', record['channel'],
                           '--pubkey', identity, '--role', role])
         buzz(config, ['channels', 'set-add-policy', '--policy', 'anyone'], record)
@@ -484,7 +496,7 @@ def run(config, component, slug=None):
     if record['state'] == 'retired' or not (root / 'workers' / (slug + '.busy')).exists():
         raise ValueError('Worker is retired')
     env = environment(config, record)
-    env.update(BUZZ_ACP_AGENT_COMMAND=tools['adapter'], BUZZ_ACP_AGENT_OWNER=config['owner_pubkey'],
+    env.update(BUZZ_ACP_AGENT_COMMAND=tools['adapter'], BUZZ_ACP_AGENT_OWNER=human_pubkey(config),
                BUZZ_ACP_CHANNELS=record['channel'], BUZZ_ACP_SUBSCRIBE='all', BUZZ_ACP_KINDS='9',
                BUZZ_ACP_CONTEXT_MESSAGE_LIMIT='100', BUZZ_ACP_SESSION_MAP=str(root / 'workers' / (slug + '.sessions.json')),
                BUZZ_ACP_RESPOND_TO='anyone', BUZZ_ACP_AGENTS='1', BUZZ_ACP_RELAY_OBSERVER='true',
@@ -501,8 +513,10 @@ def main():
     parser.add_argument('--root', type=Path, default=Path.home() / 'buzz-local-manager')
     sub = parser.add_subparsers(dest='command', required=True)
     conf = sub.add_parser('configure')
-    conf.add_argument('--owner-pubkey', required=True)
-    conf.add_argument('--owner-key-file')
+    conf.add_argument('--human-pubkey', required=True)
+    invite = conf.add_mutually_exclusive_group()
+    invite.add_argument('--invite')
+    invite.add_argument('--invite-file')
     for name in ('status', 'start', 'stop', 'restart'):
         sub.add_parser(name)
     item = sub.add_parser('spawn')
