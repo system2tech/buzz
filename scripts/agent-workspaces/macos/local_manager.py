@@ -14,7 +14,8 @@ import sys
 import time
 
 from manager_common import (COORDINATION_CHANNEL_NAME, atomic, auth_tag, exact_channel_id,
-                            load_json, mint_pair, pubkey, save_json, secret_key, task_slug)
+                            load_json, mint_pair, pubkey, save_json,
+                            saved_manager_session_id, secret_key, task_slug)
 
 LABELS = {'manager': 'com.mrfix.supervisor', 'watch': 'com.mrfix.buzz-watch',
           'supervisor': 'com.mrfix.worker-supervisor', 'reporter': 'com.mrfix.workspace-reporter'}
@@ -224,6 +225,18 @@ def operate(config, action):
         for component in reversed(list(LABELS)):
             stop_job(config, component)
     print(json.dumps(status(config), indent=2))
+
+
+def restart_manager(config):
+    """Stop only the recorded manager session; launchd keeps its supervisor alive."""
+    session_id = saved_manager_session_id(config['root'])
+    print('Stopping the saved manager session; its supervisor will resume this conversation.',
+          flush=True)
+    result = subprocess.run([config['tools']['claude'], 'stop', session_id],
+                            env=environment(config), capture_output=True, text=True,
+                            timeout=30)
+    if result.returncode:
+        raise RuntimeError('Claude could not stop the saved manager session')
 
 
 def mark(config, slug, state):
@@ -490,7 +503,7 @@ def main():
     conf = sub.add_parser('configure')
     conf.add_argument('--owner-pubkey', required=True)
     conf.add_argument('--owner-key-file')
-    for name in ('status', 'start', 'stop'):
+    for name in ('status', 'start', 'stop', 'restart'):
         sub.add_parser(name)
     item = sub.add_parser('spawn')
     item.add_argument('slug')
@@ -511,6 +524,8 @@ def main():
             print(json.dumps(status(config), indent=2))
         elif args.command in ('start', 'stop'):
             operate(config, args.command)
+        elif args.command == 'restart':
+            restart_manager(config)
         elif args.command == 'spawn':
             spawn(config, args.slug, args.task)
         elif args.command == 'retire':

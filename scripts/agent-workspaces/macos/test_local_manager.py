@@ -135,6 +135,17 @@ class LocalTests(unittest.TestCase):
         self.assertEqual(env['MRFIX_ROOT'],str(self.root))
         self.assertEqual(env['BUZZ_AUTH_TAG'],'[]')
 
+    def test_local_restart_stops_only_the_saved_manager_session(self):
+        session_id = '12345678-1234-4234-8234-123456789abc'
+        (self.root / '.session-id').write_text(session_id + '\n')
+        (self.root / '.buzz-key').write_text('not-a-real-key')
+        self.config.update(tools={'claude': '/tools/claude', 'buzz': '/tools/buzz'},
+                           relay='wss://example.test')
+        response = SimpleNamespace(returncode=0, stdout='', stderr='')
+        with patch.object(local.subprocess, 'run', return_value=response) as run:
+            local.restart_manager(self.config)
+        self.assertEqual(run.call_args.args[0], ['/tools/claude', 'stop', session_id])
+
     def test_installer_refuses_unmanaged_existing_runtime(self):
         args=SimpleNamespace(root=self.root,brain=self.root/'brain')
         with self.assertRaises(ValueError):
@@ -149,7 +160,8 @@ class LocalTests(unittest.TestCase):
         key=SimpleNamespace(secret=b'2'*32)
         with patch.object(install, 'mint_pair',return_value=key), \
              patch.object(install,'pubkey',return_value='b'*64), \
-             patch.object(install.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout='room --session-id --json')) as run:
+             patch.object(install.subprocess,'run',return_value=SimpleNamespace(
+                 returncode=0,stdout='room --session-id --json conversation is kept')) as run:
             install.install(args,shared)
             original=(root/'local.json').read_bytes()
             install.install(args,shared)
@@ -162,6 +174,7 @@ class LocalTests(unittest.TestCase):
         self.assertEqual(len(list((root/'plists').glob('*.plist'))),4)
         self.assertEqual((root/'bin/buzz-local').stat().st_mode & 0o777,0o700)
         self.assertIn('#agent-managers', (root/'manager/CLAUDE.md').read_text())
+        self.assertIn('buzz-local restart', (root/'manager/CLAUDE.md').read_text())
         result=subprocess.run(['sh','-n',str(root/'bin/buzz-local')],capture_output=True)
         self.assertEqual(result.returncode,0)
 

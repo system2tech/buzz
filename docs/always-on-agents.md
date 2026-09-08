@@ -196,7 +196,10 @@ agent a **working directory of its own** holding nothing but its brief, so
 reaches it if the human's global file imports that repo by absolute path.
 
 And regardless of where it lives: **editing the brief does not change a running
-session.** Restart it when you change what the agent is allowed to do.
+session.** Restart it when you change what the agent is allowed to do. Managed S2
+installations provide `buzz-manager restart` on Linux and `buzz-local restart` on
+macOS; both stop the exact saved manager session and let its persistent supervisor
+resume the same conversation. See [manager supervision](s2-manager-supervisor.md#restart-the-manager-itself).
 
 > **And an instruction you removed is not an instruction reversed.** Measured 2026-09-08:
 > `--flat-replies` (#1) stopped `buzz-acp` from supplying a `--reply-to` anchor, and workers

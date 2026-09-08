@@ -15,7 +15,7 @@ import sys
 from manager_common import (COORDINATION_CHANNEL_NAME, REGISTRY, HEX, account_name,
                             as_user, atomic, auth_tag, buzz, config_for, exact_channel_id,
                             load_json, mint_pair, paths, pubkey, relay_url, save_json,
-                            secret_key, services)
+                            saved_manager_session_id, secret_key, services)
 
 
 def require_root():
@@ -206,6 +206,10 @@ Inspect {root}/workers before creating a duplicate task.
 
 Shared services are operated through `buzz-manager status` and `sudo buzz-manager
 start --user {user}`. Agent processes run as {user}; teammates retain root access.
+When your loaded instructions or runtime changes, finish and save current work, then
+run `buzz-manager restart` as your final action. It stops only your exact saved
+manager session; the supervisor resumes this conversation and the watcher keeps
+collecting messages. Re-arm your inbox Monitor as soon as you return.
 Sign replies: — Mr. Fix c/o {args.name}'s remote manager
 ''')
     print('Runtime initialized without copying another account\'s credentials')
@@ -308,6 +312,19 @@ def status_one(user):
             'coordination_channel': config.get('coordination_channel'), 'root': str(root)}
 
 
+def restart_manager(config):
+    """Stop only this account's recorded manager so its supervisor can resume it."""
+    user = pwd.getpwuid(os.geteuid()).pw_name
+    if config.get('user') != user:
+        raise ValueError('Run restart as the manager account that owns this runtime')
+    session_id = saved_manager_session_id(config['root'])
+    print('Stopping the saved manager session; its supervisor will resume this conversation.',
+          flush=True)
+    result = as_user(user, [config['tools']['claude'], 'stop', session_id])
+    if result.returncode:
+        raise RuntimeError('Claude could not stop the saved manager session')
+
+
 def selected_users(args):
     if args.all:
         require_root()
@@ -377,6 +394,7 @@ def main():
         group = item.add_mutually_exclusive_group()
         group.add_argument('--user')
         group.add_argument('--all', action='store_true')
+    sub.add_parser('restart', help='Personal account: restart this manager and retain its conversation')
     sub.add_parser('check-relay', help=argparse.SUPPRESS)
     run = sub.add_parser('run', help=argparse.SUPPRESS)
     run.add_argument('component', choices=['manager', 'watch', 'supervisor', 'reporter', 'worker'])
@@ -410,6 +428,8 @@ def main():
                 required = {config.get('channel'), config.get('coordination_channel')}
                 if None in required or not required.issubset(visible):
                     raise ValueError('Personal or #agent-managers channel membership is missing')
+            elif args.command == 'restart':
+                restart_manager(config)
             else:
                 import remote_workers
                 if args.command == 'run':

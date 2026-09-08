@@ -31,6 +31,26 @@ sudo -iu "$AGENT_USER" "$CLAUDE_BIN" agents --json
 
 The saved UUID must match the manager's full `sessionId`. Verify that exact session remains running across two scheduled supervisor checks. Other sessions do not count. Check the watcher and the manager's reply in its configured Buzz channel too.
 
+## Restart the manager itself
+
+Restart the manager after changing instructions or runtime files that are loaded only at session start. Finish and save the current work first. As the final action in the manager's current turn, run one command as that manager's normal OS account:
+
+```bash
+# Personal manager on the shared Linux server
+buzz-manager restart
+
+# Personal manager on a Mac; use the runtime path from its status output
+"$RUNTIME/bin/buzz-local" restart
+```
+
+The command reads the full UUID from that manager's `.session-id` and asks Claude to stop only that session. Claude keeps the conversation. The persistent supervisor sees the stopped UUID and resumes it, normally within two minutes. The watcher, reporter and task workers keep running, so messages and worker work continue while the manager is briefly unavailable.
+
+When the manager returns, it must re-arm its persistent inbox Monitor and replay from `inbox.cursor`. It should then check its own status and process any messages collected during the restart. This does not require a relay restart.
+
+Do not substitute a supervisor service restart: an already-running background manager may outlive the wrapper. Do not stop a session selected only by directory or by a short ID. If the command reports a missing or malformed saved UUID, repair the retained identity and supervisor first instead of choosing another session.
+
+For a legacy installation without `buzz-manager restart` or `buzz-local restart`, first verify that its persistent supervisor resumes the exact saved UUID as described above. Then the equivalent command, run as the manager's own OS account, is `claude stop "$(cat "$AGENT_RUNTIME/.session-id")"`. Upgrade legacy setups to the managed command rather than keeping this manual step.
+
 ## Recover it
 
 Keep `.session-id` and `.session-launched` in the retained runtime directory. Start a stopped manager service with `systemctl start "$MANAGER_UNIT"`. A service restart interrupts its processes; use it only when needed.

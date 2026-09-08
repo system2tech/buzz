@@ -35,7 +35,8 @@ def install(args, shared_source=None):
     subprocess.run([tools['buzz'], 'agent-workspace', 'publish', '--help'], check=True, capture_output=True)
     capability_checks = [(tools['watcher'], ['buzz-watch', '--help'], ['room']),
                          (tools['claude'], ['--help', '--verbose'], ['--session-id']),
-                         (tools['claude'], ['agents', '--help'], ['--json'])]
+                         (tools['claude'], ['agents', '--help'], ['--json']),
+                         (tools['claude'], ['stop', '--help'], ['conversation is kept'])]
     for executable, arguments, required in capability_checks:
         result = subprocess.run([executable, *arguments], check=True, capture_output=True, text=True)
         if not all(value in result.stdout for value in required):
@@ -107,7 +108,11 @@ Delegate a task with `{root}/bin/buzz-local spawn <slug> "<task>"`.
 Inspect existing workers before spawning duplicates. Workers have separate task
 channels and saved sessions. `buzz-local retire <slug>` stops future wakes and
 preserves the channel/history. Ordinary follow-ups may interrupt a task turn;
-that behavior is accepted. Use status to inspect services, not to restart them.
+that behavior is accepted. Use status to inspect services. When your loaded
+instructions or runtime changes, finish and save current work, then run
+`{root}/bin/buzz-local restart` as your final action. It stops only your exact
+saved manager session; the supervisor resumes this conversation and the watcher
+keeps collecting messages. Re-arm your inbox Monitor as soon as you return.
 
 Sign replies: — Mr. Fix c/o {args.name}'s Mac
 ''')

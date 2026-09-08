@@ -102,9 +102,10 @@ On the agent server, as your own account:
 ```bash
 "$HOME/mrfix/bin/claude" auth login
 "$HOME/mrfix/bin/claude" auth status
+"$HOME/mrfix/bin/claude" stop --help
 ```
 
-Open the login URL printed by the command in a browser on your own computer, sign in to your Claude account, and approve the requested access. If the CLI asks for a completion code, paste it back into that same personal-account terminal. `auth status` should then report that you are logged in. An operator may open your shell with `sudo -iu ACCOUNT`, but the login must belong to you. Do not copy another user's Claude configuration or credentials.
+Open the login URL printed by the command in a browser on your own computer, sign in to your Claude account, and approve the requested access. If the CLI asks for a completion code, paste it back into that same personal-account terminal. `auth status` should then report that you are logged in. `stop --help` must say that it keeps the conversation; the manager restart command depends on that behavior. An operator may open your shell with `sudo -iu ACCOUNT`, but the login must belong to you. Do not copy another user's Claude configuration or credentials.
 
 ### Project access — your own GitHub authorization
 
@@ -199,6 +200,8 @@ For each ready account, verify:
 New services use `buzz-manager@USER`, `buzz-manager-watch@USER`, `buzz-worker-supervisor@USER` and `buzz-workspace-reporter@USER`. Worker services use `buzz-worker-USER@SLUG`, so two people can use the same task slug. Inspect actual unit definitions for runtime and log paths. See [manager checks](s2-manager-supervisor.md) and [worker operations](s2-worker-operations.md).
 
 Later, any root operator can repeat `start --all` after an outage. Personal sign-in is only needed again if authorization expires or is revoked. Use [server recovery](s2-server-recovery.md) when instances or volumes also need restoring. Ordinary worker follow-ups retain the accepted [interruption behavior](always-on-agents.md#s2-decision-keep-interruption-for-now-2026-09-08).
+
+To reload one manager's startup instructions or runtime without stopping its watcher or workers, that manager runs `buzz-manager restart` as its own account after saving current work. Its supervisor resumes the same retained conversation. Re-arm the inbox Monitor after it returns. See [manager supervision](s2-manager-supervisor.md#restart-the-manager-itself).
 
 ## Install the shared tooling once
 

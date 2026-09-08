@@ -137,6 +137,8 @@ Retirement preserves its channel, identity, task files and saved session; it dis
 
 Use `"$RUNTIME/bin/buzz-local" status` to inspect the installation and `start` to restore missing manager jobs. `stop` stops the manager, watcher, worker supervisor and reporter; it leaves active task workers alone. These are user login jobs, so stopped manager jobs return at the next login unless their installed LaunchAgents are removed as part of an explicit uninstall.
 
+To reload the manager's startup instructions or runtime while keeping its conversation, finish its current work and use `"$RUNTIME/bin/buzz-local" restart` as the manager's final action. Only the exact saved manager session stops; its supervisor resumes it within about two minutes. The watcher and workers stay up. Re-arm the inbox Monitor after it returns. See [manager supervision](s2-manager-supervisor.md#restart-the-manager-itself).
+
 Read `watch.err`, `supervise.log`, `logs/`, and `workers/<slug>.out` under your runtime when a component fails. Keep `.session-id`, `.session-launched`, worker keys and `*.sessions.json`. New task workers are loaded from runtime plists rather than installed as login jobs, allowing intentionally sleeping workers to stay asleep across login. The worker supervisor restores retained active workers and wakes sleeping workers on messages.
 
 After a dependency or code update, repeat the channel-reply and sleep/wake checks; startup logs alone do not prove the adapter publishes replies. No relay restart is needed for this local installation.

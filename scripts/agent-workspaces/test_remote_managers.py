@@ -20,6 +20,31 @@ import workspace_reporter
 
 
 class MultiUserTests(unittest.TestCase):
+    def test_saved_manager_session_id_requires_full_canonical_uuid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session_id = '12345678-1234-4234-8234-123456789abc'
+            (root / '.session-id').write_text(session_id + '\n')
+            self.assertEqual(common.saved_manager_session_id(root), session_id)
+            for invalid in ('12345678', '12345678-1234-4234-8234-123456789ABC', ''):
+                (root / '.session-id').write_text(invalid)
+                with self.assertRaisesRegex(ValueError, 'full canonical UUID'):
+                    common.saved_manager_session_id(root)
+
+    def test_remote_restart_stops_only_the_saved_manager_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session_id = '12345678-1234-4234-8234-123456789abc'
+            (Path(directory) / '.session-id').write_text(session_id + '\n')
+            config = {'root': directory, 'user': 'harri',
+                      'tools': {'claude': '/usr/bin/claude'}}
+            with patch.object(setup.os, 'geteuid', return_value=1000), \
+                 patch.object(setup.pwd, 'getpwuid',
+                              return_value=SimpleNamespace(pw_name='harri')), \
+                 patch.object(setup, 'as_user',
+                              return_value=SimpleNamespace(returncode=0)) as run:
+                setup.restart_manager(config)
+            run.assert_called_once_with('harri', ['/usr/bin/claude', 'stop', session_id])
+
     def test_required_coordination_channel_must_resolve_exactly_once(self):
         self.assertEqual(common.exact_channel_id([
             {'channel_id': 'coordination', 'name': 'agent-managers', 'visibility': 'public'},

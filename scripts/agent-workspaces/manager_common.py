@@ -6,6 +6,7 @@ from pathlib import Path
 import pwd
 import re
 import subprocess
+import uuid
 from urllib.parse import urlsplit
 
 REGISTRY = Path('/etc/buzz-managers')
@@ -35,6 +36,18 @@ def save_json(path, value, mode=0o600):
 
 def load_json(path):
     return json.loads(Path(path).read_text())
+
+
+def saved_manager_session_id(root):
+    """Return the one canonical manager UUID that a supervisor is allowed to resume."""
+    identity = Path(root) / '.session-id'
+    try:
+        value = identity.read_text().strip()
+        if str(uuid.UUID(value)) != value:
+            raise ValueError
+    except (OSError, ValueError, AttributeError) as error:
+        raise ValueError('Manager session ID is missing or is not a full canonical UUID') from error
+    return value
 
 
 def exact_channel_id(value, name=COORDINATION_CHANNEL_NAME):
