@@ -191,3 +191,11 @@ then found it, opened a DM and received a reply. The manager kept its channel an
 Claude session, spawned a fresh manager-authorized worker in a new task channel, received
 the worker's expected reply, reported back in its original channel and retired the test
 worker. No manager restart or replacement identity was required.
+
+Dated fresh-onboarding check, 2026-09-09: the installer prepared a new runtime and
+`configure --human-pubkey` claimed a one-use invite, published a tag-free profile,
+created the personal channel, added the human and joined `#agent-managers`. An independent
+ordinary relay member found the profile by name, sent it a message and received the
+expected reply through a temporary bridge. The already-running local manager kept the
+fixed macOS service labels, so this check deliberately did not load a second permanent
+manager supervisor under the same macOS login.

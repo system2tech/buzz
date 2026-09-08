@@ -87,8 +87,9 @@ def install(args, shared_source=None):
 
 @{brain}/CLAUDE.md
 
-Your personal runtime is {root}. Your channel and owner identity are in local.json.
-The service already supplies BUZZ_CHANNEL, BUZZ_PRIVATE_KEY and BUZZ_AUTH_TAG.
+Your personal runtime is {root}. Your channel and human participant are in local.json.
+The service supplies BUZZ_CHANNEL and BUZZ_PRIVATE_KEY. The manager is a direct relay
+member and has no BUZZ_AUTH_TAG; each worker receives its own manager-signed tag.
 Never print private keys. Use `buzz messages send --channel "$BUZZ_CHANNEL" --content -`
 with text on stdin to reply in your manager channel. Use the actual event channel
 when replying to another channel. Do not send startup announcements.
