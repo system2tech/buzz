@@ -1,6 +1,8 @@
 # S2 manager supervisor
 
-The persistent supervisor checks the manager's full saved UUID, not whether any Claude session exists in the same directory. It resumes that conversation if it stops. It writes startup attempts to its log and sends no automatic restart announcements.
+The manager supervisor is a long-running shell script, kept alive by systemd on Linux or launchd on macOS. It is not an agent or model. The manager itself is a Claude Code background session. The supervisor checks that manager's full saved UUID, not whether any Claude session exists in the same directory, and resumes the same conversation if it stops. It writes startup attempts to its log and sends no automatic restart announcements.
+
+Do not confuse it with the worker supervisor. The manager supervisor maintains one permanent manager session. The worker supervisor independently sleeps and wakes task workers.
 
 Source: [supervisor](../scripts/agent-workspaces/supervise-manager.sh), [identity helper](../scripts/agent-workspaces/manager_identity.py), [reporter](../scripts/agent-workspaces/workspace_reporter.py), and [S2 service override](../scripts/agent-workspaces/mrfix-agent-persistent.conf).
 
