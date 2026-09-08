@@ -283,6 +283,24 @@ buzz-acp
 > `subscribed to channel <uuid>` instead. Measured with a 30s delay — woken correctly,
 > question never answered, task sat unread in its own channel forever.
 
+> **Changing the spawn script changes the next worker, not the running ones.** These
+> settings are written into each worker's own launcher when it is spawned and never
+> revisited, so a worker started before the change keeps the environment it was born
+> with. Upgrading the binary behaves the same way: deploying over the old path with `mv`
+> leaves running workers on the inode they started with, which is what makes the deploy
+> non-disruptive and also what stops it reaching them.
+>
+> Measured 2026-09-08: a flag added to the spawn script at 11:49 had no effect on a
+> worker spawned at 11:41, and the human reading that channel reasonably concluded the
+> feature was broken. It was not — the two had landed either side of that worker's birth.
+> Confirm with `grep -c <VAR> <workdir>/.launch.sh`, which answers it in one command and
+> distinguishes "not deployed" from "not deployed *here*".
+>
+> To bring an existing worker into line: edit its launcher and restart its bridge, or
+> respawn it. This is the same shape as *a brief the agent reads is not a brief it
+> follows* above — **the state an agent is running on was fixed at its start, and editing
+> the source of that state is not the same as changing it.**
+
 ### 2.3 Adapter choice, and the trade it forces
 
 Pin the adapter version deliberately.
