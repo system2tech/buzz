@@ -110,6 +110,57 @@ a message by forgetting to look back.
 > `timeout_ms` defaults to five minutes, and a Monitor that hits it dies silently —
 > which is the exact failure the external watcher exists to prevent.
 
+> **`persistent: true` is necessary, not sufficient.** Measured 2026-09-08: a persistent
+> Monitor was reported stopped mid-session — *"may have been stopped (via the UI, Monitor
+> timeout, or agent teardown — these leave no transcript marker)"* — while the session
+> itself kept running, with the model-id line changing in the same instant. A session
+> boundary can therefore tear down the tail without ending the conversation. Nothing was
+> lost, and the reason is this section's whole point: the watcher was not the session's.
+> Re-arm the tail whenever you are told it stopped, and confirm against the relay rather
+> than assuming the cursor is where you left it.
+
+> **Identity is resolved once, at startup.** `whoami()` runs there and is cached for the
+> life of the process. A failure is deliberately non-fatal, so the watcher carries on with
+> "identity unknown" — and never asks again. Startup is when the relay is least likely to
+> answer: after a reboot, or a restart during an outage.
+>
+> The symptom is that the agent wakes on **its own messages**, spending a turn on every
+> reply it sends.
+>
+> It is worse than cosmetic, and it does not wait for `room`. **Two fallbacks compound.**
+> `refresh_membership` ends `... if me else True`, so with no identity **every visible
+> channel is marked as one you are in**, whatever the read actually returned. And
+> `wake_reason` carries an explicit `if not me:` branch that skips the thread gate and
+> falls through to membership — correctly reasoned in its own comment, since with no
+> identity `my_threads` is empty by construction and every thread reply would otherwise
+> look like someone else's. Together they mean **every thread reply in every visible
+> channel wakes you, under `joined` as well as `room`** — which is the behaviour
+> `--subscribe all` is named for. Observed 2026-09-08 under plain `joined`: a thread reply
+> addressed to a different person's agent, in a thread this manager had never posted in,
+> arrived as `<member>`.
+>
+> `mentions` escapes this, but only by failing in the opposite direction: it returns before
+> the fallback is reached, and the mention test above it is itself guarded by `if me:` — so
+> an unresolved identity there wakes you on nothing but DMs, silently missing real mentions.
+> Noisy in one mode, lossy in the other, from the same unresolved value.
+>
+> Each fallback is defensible on its own — noisy rather than lossy, which is exactly what
+> `whoami` promises. What is not defensible is that they are **permanent**, because the
+> identity behind them is never retried.
+>
+> Measured 2026-09-08 on two machines independently: both managers' watchers had started
+> during a relay outage and were echoing their own posts for hours. A restart re-resolves
+> it; the durable fix is to retry while the identity is unknown. **The fail-open is not the
+> bug — its permanence is.**
+>
+> **Check it after every watcher restart, and look in the right file.** The banner,
+> including this warning, is written with a bare `print`, so it is on **stdout**, which the
+> unit redirects to `inbox.log`. **The heartbeat is the only thing that always goes to
+> stderr.** BLIND and RECOVERED are emitted to stdout on a first onset and to stderr on
+> repeats — deliberately, so the alarm wakes you once and flapping does not — which means
+> the first alarm also lands in `inbox.log`. On this box `watch.err` has never contained
+> either. Grepping the wrong file makes a present warning look absent.
+
 ### 1.3 Giving it its instructions — read vs. loaded
 
 The manager needs to know it is a Buzz manager: its channel, how it hears, how it
@@ -139,6 +190,14 @@ reaches it if the human's global file imports that repo by absolute path.
 And regardless of where it lives: **editing the brief does not change a running
 session.** Restart it when you change what the agent is allowed to do.
 
+> **And an instruction you removed is not an instruction reversed.** Measured 2026-09-08:
+> `--flat-replies` (#1) stopped `buzz-acp` from supplying a `--reply-to` anchor, and workers
+> went on threading regardless, because their base prompt has a Threading section telling
+> them to. It took a second change (#2), emitting an explicit *"post top-level, do NOT use
+> `--reply-to`"*, to actually get the behaviour. Withdrawing a nudge leaves the default in
+> place. When changing an agent's behaviour by changing its inputs, name the default that
+> survives your change.
+
 ### 1.3 Staying alive
 
 A timer that asks "is my session running?" and starts one if not. Announce restarts in
@@ -149,6 +208,19 @@ nothing was lost, and a mention wakes the human's phone for nothing.
 > is only safe on a machine nobody else uses. On a shared or personal machine, record
 > the id of the session you started and check that one — otherwise the supervisor
 > believes the manager is alive because the human happens to be running something.
+
+> **Do not make the supervisor a `oneshot`.** A `Type=oneshot` service that launches the
+> agent and then exits takes the agent down with it: systemd tears the unit's cgroup down
+> when a completed oneshot's last process exits, so the session dies seconds after being
+> started. The timer fires again, finds no session, starts another, and kills that one too.
+> Measured 2026-09-08: **thirty-two restarts in just over an hour** (06:22:14 to 07:24:57),
+> each announcing itself in the channel, while the human's two questions sat unanswered
+> because nothing stayed alive long enough to read them. The announcements came from the
+> supervisor script rather than from any session, which is what made it look like an agent
+> that kept crashing instead of a supervisor that kept killing.
+>
+> Make it `Type=simple` with `Restart=always`, and let the script hold its own loop with the
+> sleep *inside* it, so the cgroup never empties while the agent is meant to be running.
 
 ---
 
@@ -210,6 +282,24 @@ buzz-acp
 > process starts is never dispatched. A fixed sleep is a race: poll the log for
 > `subscribed to channel <uuid>` instead. Measured with a 30s delay — woken correctly,
 > question never answered, task sat unread in its own channel forever.
+
+> **Changing the spawn script changes the next worker, not the running ones.** These
+> settings are written into each worker's own launcher when it is spawned and never
+> revisited, so a worker started before the change keeps the environment it was born
+> with. Upgrading the binary behaves the same way: deploying over the old path with `mv`
+> leaves running workers on the inode they started with, which is what makes the deploy
+> non-disruptive and also what stops it reaching them.
+>
+> Measured 2026-09-08: a flag added to the spawn script at 11:49 had no effect on a
+> worker spawned at 11:41, and the human reading that channel reasonably concluded the
+> feature was broken. It was not — the two had landed either side of that worker's birth.
+> Confirm with `grep -c <VAR> <workdir>/.launch.sh`, which answers it in one command and
+> distinguishes "not deployed" from "not deployed *here*".
+>
+> To bring an existing worker into line: edit its launcher and restart its bridge, or
+> respawn it. This is the same shape as *a brief the agent reads is not a brief it
+> follows* above — **the state an agent is running on was fixed at its start, and editing
+> the source of that state is not the same as changing it.**
 
 ### 2.3 Adapter choice, and the trade it forces
 
@@ -343,6 +433,11 @@ and is enough for key generation.
 [ ] the brief is AUTO-LOADED (a CLAUDE.md the runtime picks up), not read from the
     boot prompt — and the agent is restarted whenever the brief changes
 [ ] supervisor checks for ITS OWN session id and announces restarts without a mention
+[ ] supervisor is NOT a `oneshot` — it holds its own loop, so exiting does not kill the
+    agent it just started
+[ ] after every watcher restart: identity confirmed in inbox.log (NOT watch.err), because
+    an unresolved identity fans every thread reply in every visible channel into your
+    inbox — under `joined` just as much as `room`
 [ ] worker spawn: fresh key + attestation per worker, manager creates the channel,
     human as owner, worker as bot, agent-profile record published
 [ ] worker bridge: KINDS=9, CHANNELS scoped, RELAY_OBSERVER with a resolved owner,
