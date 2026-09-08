@@ -762,6 +762,11 @@ pub struct PromptContext {
     /// `<core-memory>` section. On by default; disabled via
     /// `--no-memory` / `BUZZ_ACP_NO_MEMORY`.
     pub memory_enabled: bool,
+    /// When true, agent replies are posted as top-level channel messages instead
+    /// of being threaded under the triggering event. The context block omits the
+    /// `--reply-to` instruction so the agent's `buzz messages send` lands at the
+    /// channel root. Intended for dedicated task channels.
+    pub flat_replies: bool,
     /// Harness identity string for NIP-AM `harness` field. Derived from the
     /// configured `agent_command` at startup (e.g. `"goose"`, `"buzz-agent"`).
     pub harness_name: String,
@@ -2663,6 +2668,7 @@ pub async fn run_prompt_task(
                 team_instructions: standing.team_instructions,
                 agent_canvas: standing.agent_canvas,
                 standing_context_sent,
+                flat_replies: ctx.flat_replies,
             },
         )
     } else {
@@ -8388,6 +8394,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             agent_keys: agent_keys.clone(),
             agent_owner_pubkey: owner_pubkey,
             memory_enabled: false,
+            flat_replies: false,
             harness_name: "goose".to_string(),
             relay_url: "ws://127.0.0.1:3000".to_string(),
         }

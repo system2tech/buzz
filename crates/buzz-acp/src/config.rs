@@ -503,6 +503,17 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_EXIT_AFTER_INACTIVITY", default_value_t = 0)]
     pub exit_after_inactivity: u64,
 
+    /// Post agent replies as top-level channel messages instead of threading
+    /// them under the triggering event.
+    ///
+    /// In the default (`false`) mode the harness tells the agent to
+    /// `--reply-to <event-id>`, creating a thread. In `flat-replies` mode the
+    /// agent receives no reply anchor and its messages land at the channel root.
+    /// Intended for dedicated task channels where a single flat stream is easier
+    /// to follow than scattered threads.
+    #[arg(long, env = "BUZZ_ACP_FLAT_REPLIES", default_value_t = false)]
+    pub flat_replies: bool,
+
     /// Connect and subscribe before starting the ACP/LLM subprocess pool.
     #[arg(long, env = "BUZZ_ACP_LAZY_POOL", default_value_t = false)]
     pub lazy_pool: bool,
@@ -610,6 +621,9 @@ pub struct Config {
     /// `from_cli()`. `None` when using the compiled-in default or when
     /// `--no-base-prompt` is set.
     pub base_prompt_content: Option<String>,
+    /// When true, agent replies go top-level instead of threading under the
+    /// triggering event. See [`CliArgs::flat_replies`].
+    pub flat_replies: bool,
 }
 
 /// Maximum length, in characters, of a session title sent to the adapter.
@@ -1155,6 +1169,7 @@ impl Config {
             agent_owner: args.agent_owner.map(|s| s.trim().to_ascii_lowercase()),
             no_base_prompt: args.no_base_prompt,
             base_prompt_content,
+            flat_replies: args.flat_replies,
         };
 
         Ok(config)
@@ -1529,6 +1544,7 @@ mod tests {
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            flat_replies: false,
         }
     }
 
