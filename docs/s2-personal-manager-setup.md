@@ -166,7 +166,7 @@ IFS= read -r OWNER_PUBKEY
 /opt/buzz-manager/bin/buzz-manager status
 ```
 
-`configure` asks for your private signing key through a hidden terminal prompt, verifies it against your public key, and configures your manager and channel. Never paste the private key into an agent conversation or channel. If it is already in a private file, add `--owner-key-file "$OWNER_KEY_FILE"`, where that variable contains only the file path.
+`configure` asks for your private signing key through a hidden terminal prompt, verifies it against your public key, and configures your manager and personal channel. It also finds the single active open `#agent-managers` channel by name and joins the manager to it; setup stops if that channel is missing or ambiguous. No channel ID is hard-coded. Never paste the private key into an agent conversation or channel. If it is already in a private file, add `--owner-key-file "$OWNER_KEY_FILE"`, where that variable contains only the file path.
 
 The command uses your signing key once to authorize the manager and saves only that signed authorization. New workers are authorized with the manager's own key; your private key is not saved. The relay permits one worker generation beneath a directly human-authorized manager, provided that human is still a relay member. Workers cannot recursively delegate through that chain. Existing worker identities and authorizations stay unchanged. If you cannot access your Buzz key, report that specific blocker. Existing `.owner-key` files are preserved: remove one only after verifying the updated installation can create a worker without reading it and checking no legacy tool still needs it.
 
@@ -191,7 +191,7 @@ Resolve each missing prerequisite shown by `status`. An account waiting for logi
 
 For each ready account, verify:
 
-1. Its watcher, manager supervisor, worker supervisor and reporter are active; logs show successful relay access.
+1. Its watcher, manager supervisor, worker supervisor and reporter are active; logs show successful relay access. Status and the relay check confirm membership in both its personal channel and `#agent-managers`.
 2. Its exact saved manager session remains alive across two supervisor checks. Another Claude session in the same folder does not count.
 3. A message you send in its personal Buzz channel receives a reply from the correct manager and the sidebar status is fresh.
 4. A small authorized task creates a worker owned by their manager. Channel members can view its live activity; viewing does not grant runtime control. The worker replies, sleeps, and wakes in the same saved conversation.

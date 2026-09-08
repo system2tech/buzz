@@ -12,6 +12,7 @@ REGISTRY = Path('/etc/buzz-managers')
 USER = re.compile(r'[a-z][a-z0-9_-]{0,30}\Z')
 SLUG = re.compile(r'[a-z0-9][a-z0-9-]{0,63}\Z')
 HEX = re.compile(r'[a-f0-9]{64}\Z')
+COORDINATION_CHANNEL_NAME = 'agent-managers'
 
 
 def atomic(path, text, mode=0o600):
@@ -34,6 +35,24 @@ def save_json(path, value, mode=0o600):
 
 def load_json(path):
     return json.loads(Path(path).read_text())
+
+
+def exact_channel_id(value, name=COORDINATION_CHANNEL_NAME):
+    rows = value.get('channels', []) if isinstance(value, dict) else value
+    if not isinstance(rows, list):
+        raise ValueError(f'Cannot inspect required #{name} channel')
+    matches = []
+    for row in rows:
+        if (not isinstance(row, dict)
+                or str(row.get('name', '')).casefold() != name.casefold()
+                or row.get('visibility') not in ('open', 'public')):
+            continue
+        channel = row.get('channel_id') or row.get('id')
+        if channel:
+            matches.append(str(channel))
+    if len(matches) != 1:
+        raise ValueError(f'Required active open #{name} channel must exist exactly once; found {len(matches)}')
+    return matches[0]
 
 
 def account_name(value):

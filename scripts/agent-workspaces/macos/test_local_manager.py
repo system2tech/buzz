@@ -96,10 +96,15 @@ class LocalTests(unittest.TestCase):
              patch.object(local, 'pubkey', return_value='a'*64), \
              patch.object(local, 'auth_tag', return_value=[]), \
              patch.object(local.getpass, 'getpass', return_value='not-a-real-key'), \
-             patch.object(local, 'buzz', return_value={}) as buzz:
+             patch.object(local, 'buzz', side_effect=[
+                 {}, {}, [{'channel_id': 'coordination', 'name': 'agent-managers',
+                           'visibility': 'public'}], {}
+             ]) as buzz:
             local.configure(saved, SimpleNamespace(owner_pubkey='a'*64, owner_key_file=None))
         self.assertFalse(any(c.args[1][:2] == ['channels','create'] for c in buzz.call_args_list))
-        self.assertTrue(local.load_json(self.root/'local.json')['configured'])
+        configured = local.load_json(self.root/'local.json')
+        self.assertTrue(configured['configured'])
+        self.assertEqual(configured['coordination_channel'], 'coordination')
 
     def test_start_requires_personal_readiness_before_loading_jobs(self):
         with patch.object(local, 'status', return_value={'missing':['claude_login']}), \
@@ -156,6 +161,7 @@ class LocalTests(unittest.TestCase):
             self.assertIn('Label',plistlib.loads(p.read_bytes()))
         self.assertEqual(len(list((root/'plists').glob('*.plist'))),4)
         self.assertEqual((root/'bin/buzz-local').stat().st_mode & 0o777,0o700)
+        self.assertIn('#agent-managers', (root/'manager/CLAUDE.md').read_text())
         result=subprocess.run(['sh','-n',str(root/'bin/buzz-local')],capture_output=True)
         self.assertEqual(result.returncode,0)
 

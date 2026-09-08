@@ -92,6 +92,11 @@ Never print private keys. Use `buzz messages send --channel "$BUZZ_CHANNEL" --co
 with text on stdin to reply in your manager channel. Use the actual event channel
 when replying to another channel. Do not send startup announcements.
 
+Your shared coordination channel is `#agent-managers`, recorded as
+`coordination_channel` in local.json. Read every message there. Do not
+acknowledge routine updates. Reply when a message asks you directly, assigns or
+hands off work, reports a relevant conflict, or needs information only you have.
+
 Before working, start a persistent inbox Monitor with a long timeout. Read the
 saved {root}/inbox.cursor (or begin at line 1) and follow {root}/inbox.log from
 that line using tail -F. Save the next unread line after processing messages, so

@@ -20,6 +20,46 @@ import workspace_reporter
 
 
 class MultiUserTests(unittest.TestCase):
+    def test_required_coordination_channel_must_resolve_exactly_once(self):
+        self.assertEqual(common.exact_channel_id([
+            {'channel_id': 'coordination', 'name': 'agent-managers', 'visibility': 'public'},
+            {'channel_id': 'private', 'name': 'agent-managers', 'visibility': 'private'},
+            {'channel_id': 'other', 'name': 'agent-managers-archive', 'visibility': 'open'},
+        ]), 'coordination')
+        for rows in ([], [
+            {'channel_id': 'one', 'name': 'agent-managers', 'visibility': 'open'},
+            {'channel_id': 'two', 'name': 'AGENT-MANAGERS', 'visibility': 'open'},
+        ]):
+            with self.assertRaisesRegex(ValueError, 'must exist exactly once'):
+                common.exact_channel_id(rows)
+
+    def test_configuration_joins_required_coordination_channel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {'root': directory, 'name': 'Test', 'manager_pubkey': 'b'*64}
+            key = SimpleNamespace(secret=b'x'*32)
+            args = SimpleNamespace(owner_pubkey='a'*64, owner_key_file=None)
+            replies = [{}, {'id': 'personal'}, {},
+                       [{'channel_id': 'coordination', 'name': 'agent-managers',
+                         'visibility': 'public'}], {}]
+            with patch.object(setup.os, 'geteuid', return_value=1000), \
+                 patch.object(setup.pwd, 'getpwuid', return_value=SimpleNamespace(pw_name='harri')), \
+                 patch.object(setup, 'config_for', return_value=dict(config)), \
+                 patch.object(setup.getpass, 'getpass', return_value='hidden'), \
+                 patch.object(setup, 'secret_key', return_value=key), \
+                 patch.object(setup, 'pubkey', return_value='a'*64), \
+                 patch.object(setup, 'auth_tag', return_value=[]), \
+                 patch.object(setup, 'buzz', side_effect=replies) as buzz:
+                setup.configure_locked(args)
+            saved = common.load_json(root / 'manager.json')
+            self.assertEqual(saved['channel'], 'personal')
+            self.assertEqual(saved['coordination_channel'], 'coordination')
+            self.assertTrue(saved['configured'])
+            self.assertIn(
+                ['channels', 'join', '--channel', 'coordination'],
+                [call.args[1] for call in buzz.call_args_list],
+            )
+
     def test_shared_installer_includes_discoverable_setup_guides(self):
         source = Path(__file__).resolve().parent
         with tempfile.TemporaryDirectory() as directory:

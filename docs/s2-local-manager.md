@@ -97,7 +97,7 @@ IFS= read -r OWNER_PUBKEY
 "$RUNTIME/bin/buzz-local" status
 ```
 
-Enter your private key only at the hidden prompt. Configuration verifies the matching identity, authorizes the separate manager, creates its private channel and adds you as an owner. The key is used once and is not saved; the manager signs new worker authorizations with its own key. Existing `.owner-key` files are preserved. Remove one only after verifying worker creation with the updated tool and confirming no legacy tool still uses it. An existing installation that uses a remote signer keeps that arrangement unless you explicitly migrate it.
+Enter your private key only at the hidden prompt. Configuration verifies the matching identity, authorizes the separate manager, creates its private channel, adds you as an owner, and joins the manager to the single active open `#agent-managers` channel. Setup stops if that channel is missing or ambiguous; no channel ID is hard-coded. The key is used once and is not saved; the manager signs new worker authorizations with its own key. Existing `.owner-key` files are preserved. Remove one only after verifying worker creation with the updated tool and confirming no legacy tool still uses it. An existing installation that uses a remote signer keeps that arrangement unless you explicitly migrate it.
 
 If configuration stops after an uncertain channel-creation response, inspect the saved `local.json` and your channels before retrying. The tool preserves the identity and records the uncertainty to avoid duplicate channels. A failed owner-membership step can be retried using the same key and channel.
 
@@ -113,9 +113,10 @@ If configuration stops after an uncertain channel-creation response, inspect the
 Verify the full flow:
 
 1. Status shows the watcher, manager supervisor, worker supervisor and reporter running. Your saved full manager session ID must match the live session across two supervisor checks.
-2. Confirm the manager has a persistent inbox Monitor. Send it a short question in its new Buzz channel and confirm a reply and fresh sidebar status.
-3. Give it a small task, or run `"$RUNTIME/bin/buzz-local" spawn setup-check "Reply in this task channel and remember the word maple for the resume test."` The worker must appear beneath your manager, publish a channel reply, and show activity.
-4. In `local.json`, temporarily set `worker_idle_minutes` to `3`. Reload **only this new setup's worker supervisor** using the commands below. Leave the test worker quiet, confirm it sleeps, then message its task channel asking for the remembered word. Verify a reply and the same retained session. Restore the previous idle setting and reload the supervisor again.
+2. Confirm the manager belongs to both its personal channel and `#agent-managers`. It reads every coordination message but does not acknowledge routine updates.
+3. Confirm the manager has a persistent inbox Monitor. Send it a short question in its new Buzz channel and confirm a reply and fresh sidebar status.
+4. Give it a small task, or run `"$RUNTIME/bin/buzz-local" spawn setup-check "Reply in this task channel and remember the word maple for the resume test."` The worker must appear beneath your manager, publish a channel reply, and show activity.
+5. In `local.json`, temporarily set `worker_idle_minutes` to `3`. Reload **only this new setup's worker supervisor** using the commands below. Leave the test worker quiet, confirm it sleeps, then message its task channel asking for the remembered word. Verify a reply and the same retained session. Restore the previous idle setting and reload the supervisor again.
 
 For that deliberate settings change:
 

@@ -13,7 +13,8 @@ import subprocess
 import sys
 import time
 
-from manager_common import atomic, auth_tag, load_json, mint_pair, pubkey, save_json, secret_key, task_slug
+from manager_common import (COORDINATION_CHANNEL_NAME, atomic, auth_tag, exact_channel_id,
+                            load_json, mint_pair, pubkey, save_json, secret_key, task_slug)
 
 LABELS = {'manager': 'com.mrfix.supervisor', 'watch': 'com.mrfix.buzz-watch',
           'supervisor': 'com.mrfix.worker-supervisor', 'reporter': 'com.mrfix.workspace-reporter'}
@@ -146,6 +147,10 @@ def configure(config, args):
                                config['name'] + "'s local manager")
         buzz(config, ['channels', 'add-member', '--channel', config['channel'],
                       '--pubkey', args.owner_pubkey, '--role', 'owner'])
+        coordination = exact_channel_id(
+            buzz(config, ['channels', 'search', '--query', COORDINATION_CHANNEL_NAME, '--exact']))
+        buzz(config, ['channels', 'join', '--channel', coordination])
+        config['coordination_channel'] = coordination
         config['configured'] = True
         save_json(root / 'local.json', config)
     print('Configured channel ' + config['channel'] + '; run buzz-local status before starting')
@@ -161,7 +166,8 @@ def status(config):
         logged_in = False
     checks = {'claude_login': logged_in, 'brain': (Path(config['brain']) / 'CLAUDE.md').is_file(),
               'buzz_identity': bool(config.get('configured') and config.get('channel')
-                                    and config.get('auth_tag') and (root / '.buzz-key').is_file())}
+                                    and config.get('auth_tag') and (root / '.buzz-key').is_file()),
+              'coordination_channel': bool(config.get('coordination_channel'))}
     states = {name: inspect_job(config, name) for name in LABELS}
     exact = False
     if (root / '.session-id').exists():
@@ -203,11 +209,13 @@ def operate(config, action):
         state = status(config)
         if state['missing']:
             raise ValueError('Complete prerequisites: ' + ', '.join(state['missing']))
-        rows = buzz(config, ['channels', 'list'])
+        rows = buzz(config, ['channels', 'list', '--member'])
         if isinstance(rows, dict):
             rows = rows.get('channels', [])
-        if not any((r.get('channel_id') or r.get('id')) == config['channel'] for r in rows):
-            raise ValueError('Manager channel is not accessible')
+        visible = {(r.get('channel_id') or r.get('id')) for r in rows}
+        required = {config.get('channel'), config.get('coordination_channel')}
+        if None in required or not required.issubset(visible):
+            raise ValueError('Personal or #agent-managers channel membership is missing')
         install_login_plists(config)
         atomic(Path(config['root']) / '.ready', 'Configured\n')
         for component in ('watch', 'supervisor', 'manager', 'reporter'):

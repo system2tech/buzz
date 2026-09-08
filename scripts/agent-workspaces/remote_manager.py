@@ -12,9 +12,10 @@ import shutil
 import subprocess
 import sys
 
-from manager_common import (REGISTRY, HEX, account_name, as_user, atomic, auth_tag,
-                            buzz, config_for, load_json, mint_pair, paths, pubkey,
-                            relay_url, save_json, secret_key, services)
+from manager_common import (COORDINATION_CHANNEL_NAME, REGISTRY, HEX, account_name,
+                            as_user, atomic, auth_tag, buzz, config_for, exact_channel_id,
+                            load_json, mint_pair, paths, pubkey, relay_url, save_json,
+                            secret_key, services)
 
 
 def require_root():
@@ -182,6 +183,11 @@ You are this person's Mr. Fix manager on the shared agent server. Your own runti
 is {root}; your manager channel and owner identity are in manager.json there.
 Source {root}/env.sh for Buzz commands. Never use another account's identity.
 
+Your shared coordination channel is `#agent-managers`, recorded as
+`coordination_channel` in manager.json. Read every message there. Do not
+acknowledge routine updates. Reply when a message asks you directly, assigns or
+hands off work, reports a relevant conflict, or needs information only you have.
+
 Before other work, start a persistent inbox Monitor using the available Monitor
 tool with a long timeout and command:
 `tail -F -n +1 {root}/inbox.log`
@@ -250,6 +256,10 @@ def configure_locked(args):
         save_json(root / 'manager.json', config)
     buzz(config, ['channels', 'add-member', '--channel', config['channel'],
                   '--pubkey', args.owner_pubkey, '--role', 'owner'])
+    coordination = exact_channel_id(
+        buzz(config, ['channels', 'search', '--query', COORDINATION_CHANNEL_NAME, '--exact']))
+    buzz(config, ['channels', 'join', '--channel', coordination])
+    config['coordination_channel'] = coordination
     config["configured"] = True
     save_json(root / "manager.json", config)
     print(f"Configured {user}: manager channel {config['channel']}. Run buzz-manager status.")
@@ -263,8 +273,10 @@ def status_one(user):
     ssh_keys = Path(account.pw_dir) / '.ssh/authorized_keys'
     checks = {'ssh_public_key': ssh_keys.is_file() and ssh_keys.stat().st_size > 0,
               'brain_checkout': (Path(account.pw_dir) / 'mr-fix/CLAUDE.md').is_file(),
-              'buzz_identity': bool(config.get('configured') and config.get('owner_pubkey') and config.get('channel')
-                                    and config.get('auth_tag') and (root / '.buzz-key').is_file()),
+              'buzz_identity': bool(config.get('configured') and config.get('owner_pubkey')
+                                    and config.get('channel') and config.get('auth_tag')
+                                    and (root / '.buzz-key').is_file()),
+              'coordination_channel': bool(config.get('coordination_channel')),
               'claude_login': False}
     try:
         result = as_user(user, [config['tools']['claude'], 'auth', 'status', '--json'])
@@ -292,7 +304,8 @@ def status_one(user):
     return {'user': user, 'layout': 'personal', 'checks': checks,
             'missing': [name for name, ok in checks.items() if not ok],
             'services': unit_states, 'exact_manager_running': exact,
-            'channel': config.get('channel'), 'root': str(root)}
+            'channel': config.get('channel'),
+            'coordination_channel': config.get('coordination_channel'), 'root': str(root)}
 
 
 def selected_users(args):
@@ -391,10 +404,12 @@ def main():
                 raise ValueError('Runtime commands must run as the personal account')
             config = config_for(pwd.getpwuid(os.geteuid()).pw_name)
             if args.command == 'check-relay':
-                channels = buzz(config, ['channels', 'list'])
+                channels = buzz(config, ['channels', 'list', '--member'])
                 rows = channels.get('channels', []) if isinstance(channels, dict) else channels
-                if not any((c.get('channel_id') or c.get('id')) == config.get('channel') for c in rows):
-                    raise ValueError('Configured manager channel is not accessible')
+                visible = {(c.get('channel_id') or c.get('id')) for c in rows}
+                required = {config.get('channel'), config.get('coordination_channel')}
+                if None in required or not required.issubset(visible):
+                    raise ValueError('Personal or #agent-managers channel membership is missing')
             else:
                 import remote_workers
                 if args.command == 'run':

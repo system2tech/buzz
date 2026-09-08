@@ -455,7 +455,8 @@ and is enough for key generation.
 ```
 [ ] relay reachable; note whether it requires membership
 [ ] manager keypair minted, attestation signed by the owner key (owner key stays put)
-[ ] manager channel created, human added
+[ ] personal manager channel created, human added
+[ ] manager joined to the single active open #agent-managers coordination channel
 [ ] watcher running under the service manager, appending to a file, liveness on stderr
 [ ] agent tails the file from a cursor, persistently
 [ ] the brief is AUTO-LOADED (a CLAUDE.md the runtime picks up), not read from the
