@@ -126,12 +126,20 @@ a message by forgetting to look back.
 > The symptom is that the agent wakes on **its own messages**, spending a turn on every
 > reply it sends.
 >
-> It is worse than cosmetic. `refresh_membership` ends `... if me else True`, so with no
-> identity **every visible channel is marked as one you are in**, even where the read
-> succeeded and shows otherwise. Under `--subscribe joined` that is the intended fail-open,
-> noisy rather than lossy, which is the right direction. Under `--subscribe room`, which
-> gates thread replies on that same flag, it silently becomes `--subscribe all` for every
-> thread reply in every visible channel.
+> It is worse than cosmetic, and it does not wait for `room`. **Two fallbacks compound.**
+> `refresh_membership` ends `... if me else True`, so with no identity **every visible
+> channel is marked as one you are in**, whatever the read actually returned. And
+> `wake_reason` carries an explicit `if not me:` branch that skips the thread gate and
+> falls through to membership — correctly reasoned in its own comment, since with no
+> identity `my_threads` is empty by construction and every thread reply would otherwise
+> look like someone else's. Together they mean **every thread reply in every visible
+> channel wakes you, in every mode** — which is the behaviour `--subscribe all` is named
+> for. Observed 2026-09-08 under plain `joined`: a thread reply addressed to a different
+> person's agent, in a thread this manager had never posted in, arrived as `<member>`.
+>
+> Each fallback is defensible on its own — noisy rather than lossy, which is exactly what
+> `whoami` promises. What is not defensible is that they are **permanent**, because the
+> identity behind them is never retried.
 >
 > Measured 2026-09-08 on two machines independently: both managers' watchers had started
 > during a relay outage and were echoing their own posts for hours. A restart re-resolves
