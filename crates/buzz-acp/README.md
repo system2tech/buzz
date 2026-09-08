@@ -23,6 +23,18 @@ cargo build --release -p buzz-acp
 export PATH="$PWD/target/release:$PATH"
 ```
 
+> **macOS (Apple Silicon):** a freshly built `buzz-acp` is only linker-signed, which
+> AMFI rejects at exec — the process is SIGKILLed with `Code Signature Invalid`, even
+> though `codesign --verify` passes on disk. Re-sign it ad-hoc after building, and again
+> after copying it anywhere:
+>
+> ```bash
+> codesign --force -s - target/release/buzz-acp
+> ```
+>
+> Linux builds (including the Docker `rust:1.95` build used for the agent servers) are
+> not affected.
+
 ## Generating Keys
 
 Each agent needs a Nostr keypair — this is the agent's identity in Buzz. Use `buzz-admin` to generate one:
