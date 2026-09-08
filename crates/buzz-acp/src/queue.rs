@@ -1675,6 +1675,9 @@ pub struct FormatPromptArgs<'a> {
     /// Defaults to `false` so a caller that never sets it behaves as if this
     /// were the session's first message.
     pub standing_context_sent: bool,
+    /// When true, omit the `--reply-to` instruction from the context block so
+    /// the agent posts top-level. See `--flat-replies` CLI flag.
+    pub flat_replies: bool,
 }
 
 /// The prompt sections that do not change for the life of a session: base
@@ -1822,8 +1825,14 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
     //   - top-level     → anchor to the triggering event (it becomes the root)
     // Agent↔agent turns get no forced anchor — deep nesting is intentional
     // there. DMs are always 1:1 with a human, so they always anchor.
+    //
+    // `flat_replies` suppresses the anchor entirely (channel messages only —
+    // DMs still thread because they are always 1:1). The agent then gets no
+    // `--reply-to` instruction and posts at the channel root.
     let sender_pubkey = last_event.event.pubkey.to_hex();
-    let reply_anchor = if is_dm {
+    let reply_anchor = if args.flat_replies && !is_dm {
+        None
+    } else if is_dm {
         thread_tags
             .root_event_id
             .is_some()
@@ -5053,6 +5062,117 @@ mod tests {
             prompt.contains("new top-level message"),
             "batched top-level-last prompt should use the new-thread instruction"
         );
+    }
+
+    // --- flat_replies: top-level replies in task channels ----------------------
+
+    #[test]
+    fn test_flat_replies_suppresses_reply_anchor_for_top_level_message() {
+        let ch = Uuid::new_v4();
+        let event = make_event("human asks something");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                flat_replies: true,
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+        assert!(
+            !prompt.contains("--reply-to"),
+            "flat_replies should suppress the reply anchor for channel messages"
+        );
+    }
+
+    #[test]
+    fn test_flat_replies_suppresses_reply_anchor_for_thread_reply() {
+        let ch = Uuid::new_v4();
+        let root_id = "a".repeat(64);
+        let event = make_event_with_tags(
+            "thread reply from human",
+            vec![vec!["e".into(), root_id.clone(), "".into(), "reply".into()]],
+        );
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                flat_replies: true,
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+        assert!(
+            !prompt.contains("--reply-to"),
+            "flat_replies should suppress the reply anchor even for thread replies"
+        );
+    }
+
+    #[test]
+    fn test_flat_replies_does_not_affect_dm_threading() {
+        let ch = Uuid::new_v4();
+        let root_id = "b".repeat(64);
+        let event = make_event_with_tags(
+            "dm thread reply",
+            vec![vec!["e".into(), root_id, "".into(), "reply".into()]],
+        );
+        let event_id = event.id.to_hex();
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let ci = PromptChannelInfo {
+            name: "DM".into(),
+            channel_type: "dm".into(),
+            description: None,
+            project: None,
+        };
+
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                channel_info: Some(&ci),
+                flat_replies: true,
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+        assert!(
+            prompt.contains(&format!("--reply-to {event_id}")),
+            "flat_replies must NOT suppress DM threading — DMs are always 1:1"
+        );
+    }
+
+    #[test]
+    fn test_default_flat_replies_is_false() {
+        let args = FormatPromptArgs::default();
+        assert!(!args.flat_replies, "flat_replies should default to false");
     }
 
     /// Build a single-event FlushBatch with the given content.

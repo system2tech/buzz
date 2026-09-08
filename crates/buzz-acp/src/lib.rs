@@ -2222,6 +2222,7 @@ async fn tokio_main() -> Result<()> {
             .as_deref()
             .and_then(|hex| nostr::PublicKey::from_hex(hex).ok()),
         memory_enabled: config.memory_enabled,
+        flat_replies: config.flat_replies,
         harness_name: crate::config::normalize_agent_command_identity(&config.agent_command),
         relay_url: config.relay_url.clone(),
     });
@@ -4484,16 +4485,19 @@ mod agent_draft_prompt_tests {
     /// mentioning the human who had asked, and his phone's Activity showed
     /// nothing newer than that morning.
     ///
-    /// Pinned because the rule sits one bullet below "Only `@mention` when you
-    /// need their attention", which reads as its opposite. A merge that keeps
-    /// the general rule and drops this clarification restores the silence
-    /// without failing anything else.
+    /// Pinned because the mention guidance must be consistent: top-level
+    /// messages notify automatically (no forced @mention), while thread
+    /// replies still need a mention to notify. The old "Answering someone IS
+    /// needing their attention" rule was removed when `--flat-replies` made
+    /// top-level replies the default for task channels.
     #[test]
-    fn shared_base_prompt_requires_mentioning_the_person_you_answer() {
+    fn shared_base_prompt_mention_guidance_reflects_flat_reply_design() {
         let prompt = include_str!("base_prompt.md");
-        assert!(prompt.contains("Answering someone IS needing their attention"));
-        assert!(prompt.contains("--mention <their hex pubkey>"));
-        assert!(prompt.contains("Replying in their thread is not enough"));
+        assert!(prompt.contains("Top-level channel messages notify members automatically"));
+        assert!(
+            !prompt.contains("Answering someone IS needing their attention"),
+            "the forced @mention rule should have been removed"
+        );
     }
 
     #[test]
@@ -6857,6 +6861,7 @@ mod build_mcp_servers_tests {
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            flat_replies: false,
         }
     }
 
@@ -7082,6 +7087,7 @@ mod error_outcome_emission_tests {
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            flat_replies: false,
         }
     }
 
