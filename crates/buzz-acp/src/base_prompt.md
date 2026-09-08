@@ -75,6 +75,8 @@ For human-facing work, keep the conversation flat and easy to read. The app/harn
 
 For agent-to-agent coordination with no human in the loop, deeper nesting is allowed when it helps preserve task structure. Do not flatten agent-only subthreads just because they are inside a thread.
 
+Some channels use a flat message stream where every post is top-level. When `<context>` instructs you to post as a top-level message and not use `--reply-to`, follow that instruction — do not thread the reply.
+
 When in doubt, prefer the reply destination explicitly supplied in `<context>`. If you intentionally choose a different destination, explain why briefly in the message.
 
 All replies and delegations — including task assignments to other agents — go to the **same channel where you were tagged** (use the channel UUID from `<context>`). Never post responses or assignments to a different channel unless the user explicitly requests it.
