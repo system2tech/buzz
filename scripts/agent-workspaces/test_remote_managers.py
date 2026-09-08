@@ -45,6 +45,18 @@ class MultiUserTests(unittest.TestCase):
                 setup.restart_manager(config)
             run.assert_called_once_with('harri', ['/usr/bin/claude', 'stop', session_id])
 
+    def test_remote_restart_supports_retained_legacy_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'mrfix'
+            root.mkdir()
+            install = {'tools': {'claude': '/usr/bin/claude'}}
+            with patch.object(setup, 'paths',
+                              return_value=(SimpleNamespace(), root)), \
+                 patch.object(setup, 'load_json', return_value=install):
+                config = setup.restart_config('khoi')
+            self.assertEqual(config, {'user': 'khoi', 'root': str(root),
+                                      'tools': install['tools']})
+
     def test_required_coordination_channel_must_resolve_exactly_once(self):
         self.assertEqual(common.exact_channel_id([
             {'channel_id': 'coordination', 'name': 'agent-managers', 'visibility': 'public'},

@@ -325,6 +325,15 @@ def restart_manager(config):
         raise RuntimeError('Claude could not stop the saved manager session')
 
 
+def restart_config(user):
+    """Use the managed configuration, or the retained per-user root for legacy managers."""
+    _, root = paths(user)
+    if (root / 'manager.json').is_file():
+        return config_for(user)
+    install = load_json(REGISTRY / 'installation.json')
+    return {'user': user, 'root': str(root), 'tools': install['tools']}
+
+
 def selected_users(args):
     if args.all:
         require_root()
@@ -420,7 +429,11 @@ def main():
         else:
             if os.geteuid() == 0:
                 raise ValueError('Runtime commands must run as the personal account')
-            config = config_for(pwd.getpwuid(os.geteuid()).pw_name)
+            user = pwd.getpwuid(os.geteuid()).pw_name
+            if args.command == 'restart':
+                restart_manager(restart_config(user))
+            else:
+                config = config_for(user)
             if args.command == 'check-relay':
                 channels = buzz(config, ['channels', 'list', '--member'])
                 rows = channels.get('channels', []) if isinstance(channels, dict) else channels
@@ -428,9 +441,7 @@ def main():
                 required = {config.get('channel'), config.get('coordination_channel')}
                 if None in required or not required.issubset(visible):
                     raise ValueError('Personal or #agent-managers channel membership is missing')
-            elif args.command == 'restart':
-                restart_manager(config)
-            else:
+            elif args.command != 'restart':
                 import remote_workers
                 if args.command == 'run':
                     remote_workers.run_component(config, args.component, args.slug)
