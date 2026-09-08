@@ -112,8 +112,8 @@ just over an hour, with the human's questions unanswered throughout; `whoami()` 
 once at startup and cached, so a relay hiccup in that instant leaves the watcher echoing
 its own messages for the life of the process — and, because `refresh_membership` falls
 back to assuming membership *and* `wake_reason` has an `if not me:` branch that skips the
-thread gate, wakes on every thread reply in every visible channel in **every** mode, not
-just `room`; `persistent: true` on a Claude Code Monitor not surviving a session
+thread gate, wakes on every thread reply in every visible channel under `joined` as much
+as `room`; `persistent: true` on a Claude Code Monitor not surviving a session
 boundary, which is the failure the external watcher exists to absorb and did; and the
 stdout/stderr split that puts the identity banner in `inbox.log` while the heartbeat goes
 to `watch.err`, so the obvious file to check is the wrong one.

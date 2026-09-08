@@ -123,6 +123,7 @@ a message by forgetting to look back.
 > life of the process. A failure is deliberately non-fatal, so the watcher carries on with
 > "identity unknown" — and never asks again. Startup is when the relay is least likely to
 > answer: after a reboot, or a restart during an outage.
+>
 > The symptom is that the agent wakes on **its own messages**, spending a turn on every
 > reply it sends.
 >
@@ -214,9 +215,9 @@ nothing was lost, and a mention wakes the human's phone for nothing.
 > started. The timer fires again, finds no session, starts another, and kills that one too.
 > Measured 2026-09-08: **thirty-two restarts in just over an hour** (06:22:14 to 07:24:57),
 > each announcing itself in the channel, while the human's two questions sat unanswered
-> because nothing stayed alive long enough to read them. The announcements came from the supervisor script rather than
-> from any session, which is what made it look like an agent that kept crashing instead of a
-> supervisor that kept killing.
+> because nothing stayed alive long enough to read them. The announcements came from the
+> supervisor script rather than from any session, which is what made it look like an agent
+> that kept crashing instead of a supervisor that kept killing.
 >
 > Make it `Type=simple` with `Restart=always`, and let the script hold its own loop with the
 > sleep *inside* it, so the cgroup never empties while the agent is meant to be running.
