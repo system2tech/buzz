@@ -1186,6 +1186,20 @@ pub(crate) fn format_event_block(
 /// Tells the agent to default to `--reply-to <event_id>` for ordinary replies
 /// while still allowing an explicit human request to post at the channel root or
 /// top level.
+/// Append a positive top-level posting instruction when `flat_replies` is on.
+///
+/// The agent's base prompt "Threading" section nudges it to thread replies by
+/// default, so merely *omitting* the `--reply-to` instruction is not enough —
+/// the agent threads on its own.  This counterpart emits an explicit
+/// instruction to post at the channel root and NOT use `--reply-to`.
+fn append_flat_reply_instruction(s: &mut String) {
+    s.push_str(
+        "\nIMPORTANT: Post your reply as a top-level channel message. \
+         Do NOT use `--reply-to` on `buzz messages send`. \
+         This channel uses a flat message stream — every message is top-level.",
+    );
+}
+
 fn append_reply_instruction(s: &mut String, event_id: &str) {
     s.push_str(&format!(
         "\nIMPORTANT: For ordinary replies in this turn, use `--reply-to {event_id}` \
@@ -1416,6 +1430,7 @@ fn format_context_hints(
     is_dm: bool,
     conversation_context_status: ConversationContextStatus,
     reply_anchor: Option<&str>,
+    flat_replies: bool,
 ) -> String {
     let channel_display = match channel_info {
         Some(ci) => format!("{} (#{channel_id})", ci.name),
@@ -1494,7 +1509,9 @@ fn format_context_hints(
             }
         }
         s.push_str(&format!("\n{ctx_hint}"));
-        if let Some(event_id) = reply_anchor {
+        if flat_replies {
+            append_flat_reply_instruction(&mut s);
+        } else if let Some(event_id) = reply_anchor {
             append_reply_instruction(&mut s, event_id);
         }
         crate::prompt_framing::semantic_section("context", &s)
@@ -1508,7 +1525,9 @@ fn format_context_hints(
         s.push_str(
             "\nHint: Use `buzz messages get --channel <UUID>` for recent messages if needed.",
         );
-        if let Some(event_id) = reply_anchor {
+        if flat_replies {
+            append_flat_reply_instruction(&mut s);
+        } else if let Some(event_id) = reply_anchor {
             append_new_thread_reply_instruction(&mut s, event_id);
         }
         crate::prompt_framing::semantic_section("context", &s)
@@ -1856,6 +1875,7 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
             args.conversation_context_had_delivered_events,
         ),
         reply_anchor.as_deref(),
+        args.flat_replies && !is_dm,
     ));
 
     // 3. Conversation context (thread or DM).
@@ -5090,8 +5110,8 @@ mod tests {
         )
         .join("\n\n");
         assert!(
-            !prompt.contains("--reply-to"),
-            "flat_replies should suppress the reply anchor for channel messages"
+            !prompt.contains("stays threaded"),
+            "flat_replies should suppress the threaded-reply instruction for channel messages"
         );
     }
 
@@ -5123,8 +5143,8 @@ mod tests {
         )
         .join("\n\n");
         assert!(
-            !prompt.contains("--reply-to"),
-            "flat_replies should suppress the reply anchor even for thread replies"
+            !prompt.contains("stays threaded"),
+            "flat_replies should suppress the threaded-reply instruction even for thread replies"
         );
     }
 
@@ -5173,6 +5193,118 @@ mod tests {
     fn test_default_flat_replies_is_false() {
         let args = FormatPromptArgs::default();
         assert!(!args.flat_replies, "flat_replies should default to false");
+    }
+
+    #[test]
+    fn test_flat_replies_emits_top_level_instruction_for_channel_message() {
+        let ch = Uuid::new_v4();
+        let event = make_event("human asks something");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                flat_replies: true,
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+        assert!(
+            prompt.contains("top-level channel message"),
+            "flat_replies should emit a positive top-level posting instruction \
+             for channel messages, got:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("Do NOT use `--reply-to`"),
+            "flat_replies instruction must explicitly forbid --reply-to"
+        );
+    }
+
+    #[test]
+    fn test_flat_replies_emits_top_level_instruction_for_thread_reply() {
+        let ch = Uuid::new_v4();
+        let root_id = "a".repeat(64);
+        let event = make_event_with_tags(
+            "thread reply from human",
+            vec![vec!["e".into(), root_id.clone(), "".into(), "reply".into()]],
+        );
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                flat_replies: true,
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+        assert!(
+            prompt.contains("top-level channel message"),
+            "flat_replies should emit a positive top-level posting instruction \
+             even for thread replies, got:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("Do NOT use `--reply-to`"),
+            "flat_replies instruction must explicitly forbid --reply-to for thread replies"
+        );
+    }
+
+    #[test]
+    fn test_flat_replies_dm_does_not_get_top_level_instruction() {
+        let ch = Uuid::new_v4();
+        let root_id = "b".repeat(64);
+        let event = make_event_with_tags(
+            "dm thread reply",
+            vec![vec!["e".into(), root_id, "".into(), "reply".into()]],
+        );
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let ci = PromptChannelInfo {
+            name: "DM".into(),
+            channel_type: "dm".into(),
+            description: None,
+            project: None,
+        };
+
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                channel_info: Some(&ci),
+                flat_replies: true,
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+        assert!(
+            !prompt.contains("top-level channel message"),
+            "DMs must NOT get the flat-reply top-level instruction"
+        );
     }
 
     /// Build a single-event FlushBatch with the given content.
