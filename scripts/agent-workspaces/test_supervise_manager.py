@@ -18,7 +18,8 @@ def session(identity, status="busy"):
 
 class SupervisorTests(unittest.TestCase):
     def check_case(self, sessions, expected_launches=0, query_exit=0,
-                   identity=MANAGER, expected_flag="--resume", launch_exit=0):
+                   identity=MANAGER, expected_flag="--resume", launch_exit=0,
+                   mints=MANAGER):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "bin").mkdir()
@@ -45,9 +46,15 @@ with (root / "launches").open("a") as stream:
     stream.write(json.dumps(sys.argv[1:]) + "\\n")
 if int(os.environ["LAUNCH_EXIT"]):
     sys.exit(int(os.environ["LAUNCH_EXIT"]))
-flag = "--resume" if "--resume" in sys.argv else "--session-id"
-identity = sys.argv[sys.argv.index(flag) + 1]
-assert (root / ".session-id").read_text().strip() == identity
+# `--bg` manages the id itself: it honours --resume and otherwise MINTS one,
+# printing only the short form. It ignores --session-id, which is the whole
+# reason the supervisor has to record an id rather than dictate one.
+assert "--session-id" not in sys.argv, "the supervisor must not dictate an id"
+if "--resume" in sys.argv:
+    identity = sys.argv[sys.argv.index("--resume") + 1]
+else:
+    identity = os.environ["MINTS"]
+print("backgrounded · " + identity[:8])
 sessions = json.loads((root / "sessions").read_text())
 sessions = [s for s in sessions if s.get("sessionId") != identity]
 sessions.append(dict(id=identity[:8], sessionId=identity, kind="background",
@@ -64,7 +71,8 @@ touch "$MRFIX_ROOT/checked"
                 path.write_text(body)
                 path.chmod(0o755)
             env = dict(os.environ, MRFIX_ROOT=str(root), MRFIX_MANAGER_CWD=str(cwd),
-                       QUERY_EXIT=str(query_exit), LAUNCH_EXIT=str(launch_exit))
+                       QUERY_EXIT=str(query_exit), LAUNCH_EXIT=str(launch_exit),
+                       MINTS=mints)
             result = subprocess.run(["bash", str(SCRIPT)], env=env, timeout=10,
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, -15, result.stderr)
@@ -73,6 +81,11 @@ touch "$MRFIX_ROOT/checked"
             self.assertEqual(len(launches), expected_launches)
             saved = (root / ".session-id").read_text().strip() if (root / ".session-id").exists() else None
             for launch in launches:
+                if expected_flag is None:
+                    # A first launch dictates nothing; the id comes back from it.
+                    self.assertNotIn("--session-id", launch)
+                    self.assertNotIn("--resume", launch)
+                    continue
                 self.assertIn(expected_flag, launch)
                 if expected_flag == "--resume":
                     self.assertEqual(launch, ["--bg", "--resume", saved])
@@ -89,11 +102,15 @@ touch "$MRFIX_ROOT/checked"
     def test_same_folder_sibling_cannot_mask_stopped_manager(self):
         self.check_case([session(MANAGER, "stopped"), session(OTHER)], expected_launches=1)
 
-    def test_new_install_records_own_identity_without_adopting_sibling(self):
-        self.check_case([session(OTHER)], identity=None, expected_launches=1, expected_flag="--session-id")
+    def test_new_install_records_the_id_the_launch_returned(self):
+        """A fresh install dictates nothing and records what `--bg` gave back."""
+        self.check_case([session(OTHER)], identity=None, expected_launches=1,
+                        expected_flag=None)
 
-    def test_failed_first_launch_retries_same_identity(self):
-        self.check_case([], identity=None, expected_launches=2, expected_flag="--session-id", launch_exit=1)
+    def test_failed_first_launch_records_no_identity_and_retries(self):
+        """A failed launch must leave no identity behind for a later resume."""
+        self.check_case([], identity=None, expected_launches=2,
+                        expected_flag=None, launch_exit=1)
 
     def test_offline_cached_manager_is_resumed(self):
         item = session(MANAGER)
