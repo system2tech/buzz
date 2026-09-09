@@ -19,7 +19,8 @@ def session(identity, status="busy"):
 class SupervisorTests(unittest.TestCase):
     def check_case(self, sessions, expected_launches=0, query_exit=0,
                    identity=MANAGER, expected_flag="--resume", launch_exit=0,
-                   mints=MANAGER, noisy=False, expected_saved=None):
+                   mints=MANAGER, noisy=False, expected_saved=None,
+                   log_has=None, log_lacks=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "bin").mkdir()
@@ -96,6 +97,15 @@ touch "$MRFIX_ROOT/checked"
                 if expected_flag == "--resume":
                     self.assertEqual(launch, ["--bg", "--resume", saved])
                 self.assertEqual(launch[launch.index(expected_flag) + 1], saved)
+            if log_has or log_lacks:
+                # Zero launches is not evidence on its own: "recognised as alive"
+                # and "refused because the identity is unusable" both launch
+                # nothing. The log is the only thing that tells them apart.
+                text = (root / "supervise.log").read_text() if (root / "supervise.log").exists() else ""
+                for fragment in log_has or ():
+                    self.assertIn(fragment, text)
+                for fragment in log_lacks or ():
+                    self.assertNotIn(fragment, text)
             if expected_saved is not None:
                 self.assertEqual(saved, expected_saved)
             elif identity is not None:
@@ -114,6 +124,27 @@ touch "$MRFIX_ROOT/checked"
         """A fresh install dictates nothing and records what `--bg` gave back."""
         self.check_case([session(OTHER)], identity=None, expected_launches=1,
                         expected_flag=None)
+
+    def test_upgrade_keeps_a_canonical_identity_written_by_the_old_code(self):
+        """The file this code will FIND, not the file it writes.
+
+        Every `.session-id` on an existing box holds a full 36-character UUID:
+        the previous version raised unless `str(uuid.UUID(x)) == x` and minted
+        `str(uuid.uuid4())` when the file was absent. This version writes the
+        8-character form. If the validation accepted only what it writes, then
+        on the first tick after an upgrade every existing identity would be
+        unusable, the corrupt-identity branch would refuse while a live session
+        was present, and every upgraded box would log `cannot determine manager
+        identity` every 120 seconds while its manager ran fine — the wedge
+        arriving as the fix for the wedge, silently, on all boxes at once.
+
+        There is also no migration that could avoid it: the old code rejects the
+        short form and the new one would reject the long, so no single value
+        satisfies both and no ordering of a separate migration step is safe.
+        """
+        self.check_case([session(MANAGER)], identity=MANAGER,
+                        log_has=["ok — manager"],
+                        log_lacks=["cannot determine manager identity"])
 
     def test_capture_survives_colour_and_an_earlier_hex_token(self):
         """The id must come from the `backgrounded` line, escapes and all.
