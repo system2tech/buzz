@@ -13,6 +13,55 @@ FILES = ('manager_common.py', 'remote_manager.py', 'remote_workers.py',
          'manager_identity.py', 'workspace_reporter.py', 'supervise-manager.sh')
 
 
+def source_provenance(source):
+    """Identify the tree being installed, so a stale install is visible later.
+
+    This installer copies a working directory, so it can install anything and
+    leave no evidence but file mtimes. That is how the box ran an eight-hour-old
+    `remote_manager.py` on 2026-09-09 while its source had already dropped the
+    private-key prompt: the binary and the doc looked no different from current
+    ones.
+
+    **Kept out of the dependency-path record on purpose.** That dict is compared
+    for equality against the previous install and refuses a mismatch, so a commit
+    inside it would make every upgrade fail as though the dependencies had changed.
+    Provenance is written separately, and is descriptive rather than enforced.
+    """
+    def git(*args):
+        """Query the tree, and say why if we cannot.
+
+        **`safe.directory` is set for these subprocesses only.** This installer
+        runs as root against a checkout owned by an ordinary user, which is
+        git's "dubious ownership" case — it refuses, and without this the
+        provenance silently reported a clean branch as "not a git checkout",
+        failing in precisely the root-runs-the-install case that is the normal
+        one. Scoped with `-c` so nothing is written to any git config; these are
+        read-only queries and the operator has already chosen this tree by
+        running the installer out of it.
+
+        A refusal is returned with git's own reason rather than folded into
+        "not a repository", because those need different fixes and guessing
+        between them is how the first version of this misreported an install.
+        """
+        try:
+            done = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(source), *args],
+                                  capture_output=True, text=True)
+        except OSError as error:
+            return None, f'git could not be run: {error}'
+        if done.returncode != 0:
+            reason = done.stderr.strip().splitlines()
+            return None, reason[0] if reason else f'git exited {done.returncode}'
+        return done.stdout.strip(), None
+
+    commit, why = git('rev-parse', 'HEAD')
+    if commit is None:
+        return {'commit': None, 'branch': None, 'dirty': None,
+                'note': f'nothing identifies what was installed: {why}'}
+    branch, _ = git('rev-parse', '--abbrev-ref', 'HEAD')
+    changes, _ = git('status', '--porcelain', '--', '.')
+    return {'commit': commit, 'branch': branch, 'dirty': changes != ''}
+
+
 def install_guides(source, prefix):
     """Install the operational Markdown snapshot beside the shared command."""
     docs = source.parent.parent / 'docs'
@@ -91,7 +140,17 @@ def main():
         alias.symlink_to(launcher)
     install_guides(source, prefix)
     save_json(REGISTRY / 'installation.json', desired, 0o644)
+    provenance = source_provenance(source)
+    save_json(REGISTRY / 'installed-source.json', provenance, 0o644)
     print(f'Installed {launcher}; no existing services were restarted')
+    if provenance['commit'] is None:
+        print('WARNING installed from a non-git tree; what landed cannot be identified later')
+    else:
+        print(f"Installed from {provenance['branch']} at {provenance['commit'][:9]}"
+              + (' with UNCOMMITTED changes' if provenance['dirty'] else ''))
+        if provenance['dirty']:
+            print('WARNING the tree had uncommitted changes; the commit above does not '
+                  'describe what was installed')
 
 
 if __name__ == '__main__':

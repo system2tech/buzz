@@ -15,6 +15,7 @@ import manager_common as common
 import remote_manager as setup
 import remote_workers as workers
 import install_reporter
+import install_remote_managers as installer
 import install_remote_managers
 import workspace_reporter
 
@@ -369,6 +370,71 @@ class MultiUserTests(unittest.TestCase):
             self.assertEqual(env['BUZZ_ACP_MULTIPLE_EVENT_HANDLING'], 'steer')
             self.assertEqual(env['BUZZ_ACP_OBSERVER_CHANNEL_MEMBERS'], 'true')
             self.assertNotIn('CLAUDE_CONFIG_DIR', env)
+
+
+class SourceProvenanceTests(unittest.TestCase):
+    """What the installer records about the tree it copied.
+
+    The installer copies a working directory, so without this the only evidence
+    of what landed is file mtimes — which is how an eight-hour-old
+    `remote_manager.py` ran on the shared box while its source had already
+    removed the private-key prompt.
+    """
+
+    def _repo(self, root):
+        git = ['git', '-c', 'user.name=t', '-c', 'user.email=t@t']
+        subprocess.run(git + ['init', '-q', '-b', 'main', str(root)], check=True)
+        (root / 'a.py').write_text('x = 1\n')
+        subprocess.run(git + ['-C', str(root), 'add', '.'], check=True)
+        subprocess.run(git + ['-C', str(root), 'commit', '-qm', 'first'], check=True)
+
+    def test_records_commit_and_branch_of_a_clean_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._repo(root)
+            got = installer.source_provenance(root)
+            self.assertRegex(got['commit'], r'^[0-9a-f]{40}$')
+            self.assertEqual(got['branch'], 'main')
+            self.assertFalse(got['dirty'])
+
+    def test_reports_an_uncommitted_tree_as_dirty(self):
+        """The commit alone would be a lie here, so the flag has to say so."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._repo(root)
+            (root / 'a.py').write_text('x = 2\n')
+            self.assertTrue(installer.source_provenance(root)['dirty'])
+
+    def test_says_so_when_the_tree_is_not_a_checkout(self):
+        """Absent provenance must be stated, not left as a missing key."""
+        with tempfile.TemporaryDirectory() as tmp:
+            got = installer.source_provenance(Path(tmp))
+            self.assertIsNone(got['commit'])
+            self.assertIn('nothing identifies', got['note'])
+            self.assertIn('not a git repository', got['note'])
+
+    def test_reports_gits_own_reason_when_it_refuses(self):
+        """A refusal is not a missing repository, and must not read as one.
+
+        Running as root against a user-owned checkout is git's dubious-ownership
+        case. The first version of this folded that into 'not a git checkout',
+        so a clean branch was reported as unidentifiable in exactly the
+        root-runs-the-install case. The reason has to survive.
+        """
+        refusal = subprocess.CompletedProcess(
+            args=[], returncode=128, stdout='',
+            stderr="fatal: detected dubious ownership in repository at '/x'\n")
+        with patch('install_remote_managers.subprocess.run', return_value=refusal):
+            got = installer.source_provenance(Path('/x'))
+        self.assertIsNone(got['commit'])
+        self.assertIn('dubious ownership', got['note'])
+
+    def test_asks_git_to_tolerate_a_foreign_owner(self):
+        """The scoped safe.directory is the fix; assert it is actually passed."""
+        ok = subprocess.CompletedProcess(args=[], returncode=0, stdout='abc\n', stderr='')
+        with patch('install_remote_managers.subprocess.run', return_value=ok) as run:
+            installer.source_provenance(Path('/x'))
+        self.assertIn('safe.directory=*', run.call_args_list[0].args[0])
 
 
 if __name__ == '__main__':
