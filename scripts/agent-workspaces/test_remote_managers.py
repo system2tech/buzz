@@ -371,6 +371,56 @@ class MultiUserTests(unittest.TestCase):
             self.assertEqual(env['BUZZ_ACP_OBSERVER_CHANNEL_MEMBERS'], 'true')
             self.assertNotIn('CLAUDE_CONFIG_DIR', env)
 
+    def test_receipts_never_ride_without_a_state_file(self):
+        """The harness exits 2 on receipts without --state-file (`cli.py`), and the
+        unit is Restart=always with no start limit, so that is a permanent silent
+        loop whose only explanation goes to watch.err. Hold `receipts implies
+        state-file` as an invariant here rather than as a happy consequence of the
+        current argv order, so making the state file conditional later cannot
+        quietly reintroduce it.
+        """
+        for extra in ({}, {'channel': 'control-channel'}):
+            with self.subTest(extra=extra):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    (root / '.buzz-key').write_text('not-a-real-key')
+                    config = {'root': str(root), 'user': 'harri', 'relay': 'wss://r.test',
+                              'prefix': '/opt/buzz-manager',
+                              'tools': {'watcher': '/tools/watcher', 'buzz': '/tools/buzz'}}
+                    config.update(extra)
+                    with patch.object(workers, 'runtime_env', return_value={}), \
+                         patch.object(workers.os, 'dup2'), \
+                         patch.object(workers.os, 'execve', side_effect=RuntimeError) as ex:
+                        with self.assertRaises(RuntimeError):
+                            workers.run_component(config, 'watch')
+                    argv = ex.call_args.args[1]
+                    if '--receipt-channel' in argv or '--receipt-dms' in argv:
+                        self.assertIn('--state-file', argv)
+
+    def test_watcher_starts_before_configure_has_written_a_channel(self):
+        """`buzz-manager start` enables every unit whether or not configure ran.
+
+        A manager that is prepared but not yet configured has no `channel` in
+        manager.json, and the watcher must still come up: it is the thing that
+        would tell anyone the box is broken.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.buzz-key').write_text('not-a-real-key')
+            config = {'root': str(root), 'user': 'khoi', 'prefix': '/opt/buzz-manager',
+                      'relay': 'wss://buzz.example.test',
+                      'tools': {'watcher': '/tools/watcher', 'buzz': '/tools/buzz'}}
+            with patch.object(workers, 'runtime_env', return_value={'HOME': '/home/khoi'}), \
+                 patch.object(workers.os, 'dup2'), \
+                 patch.object(workers.os, 'execve', side_effect=RuntimeError) as execute:
+                with self.assertRaises(RuntimeError):
+                    workers.run_component(config, 'watch')
+            argv = execute.call_args.args[1]
+            self.assertNotIn('--receipt-channel', argv)
+            self.assertNotIn('--receipt-dms', argv)
+            self.assertEqual(argv[argv.index('--state-file') + 1],
+                             str(root / 'watcher-state.json'))
+
     def test_remote_watcher_receipts_cover_the_control_channel_and_dms(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
