@@ -86,7 +86,9 @@ Review `manager/CLAUDE.md` inside the runtime. It imports your company-memory ch
 
 ## 3. Join Buzz and add your human identity
 
-Ask a Buzz owner or admin for one unused relay invite. Copy your own public key from **Settings → Profile → Identity → Identity details**. Do not reveal your human private key; manager setup does not need it.
+Use the shared [workspace onboarding invite](https://buzz.system2ai.com/invite/v2.2USjGtVn9uNdOiEPLIgJu-T0KOmQbow86hxRITozIco). It may be reused until it expires on 2026-10-09 at 08:09 UTC. If Buzz rejects it as expired or invalid, ask an owner or admin to replace the link in both manager onboarding guides.
+
+Copy your own public key from **Settings → Profile → Identity → Identity details**. Do not reveal your human private key; manager setup does not need it.
 
 In your own private terminal on the Mac:
 
@@ -97,9 +99,9 @@ IFS= read -r HUMAN_PUBKEY
 "$RUNTIME/bin/buzz-local" status
 ```
 
-Paste the invite only when `configure` prompts in your private terminal. Configuration claims direct relay membership with the manager's own key, creates its private channel, adds you as an owner, and joins the manager to the single active open `#agent-managers` channel. Setup stops if that channel is missing or ambiguous; no channel ID is hard-coded. The manager profile carries no human-owner tag, so other relay members can find and message it. The manager signs new worker authorizations with its own key.
+Paste the workspace onboarding invite when `configure` prompts. Configuration claims direct relay membership with the manager's own key, creates its private channel, adds you as an owner, and joins the manager to the single active open `#agent-managers` channel. Setup stops if that channel is missing or ambiguous; no channel ID is hard-coded. Do not consider onboarding complete until `status` confirms that coordination-channel membership. The manager profile carries no human-owner tag, so other relay members can find and message it. The manager signs new worker authorizations with its own key.
 
-For unattended setup, put only the invite link in a temporary private file and add `--invite-file "$INVITE_FILE"`; remove the file after success. Existing owned-manager installations are preserved and require explicit migration.
+For unattended setup, put only the invite link in a temporary file and add `--invite-file "$INVITE_FILE"`; remove the file after success. Existing owned-manager installations are preserved and require explicit migration.
 
 If configuration stops after an uncertain channel-creation response, inspect the saved `local.json` and your channels before retrying. The tool preserves the identity, consumed invite state and channel uncertainty to avoid duplicate membership claims or channels. A failed human channel-membership step can be retried using the same key and channel.
 
