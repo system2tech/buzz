@@ -193,7 +193,7 @@ For each ready account, verify:
 
 1. Its watcher, manager supervisor, worker supervisor and reporter are active; logs show successful relay access. Status and the relay check confirm membership in both its personal channel and `#agent-managers`.
 2. Its exact saved manager session remains alive across two supervisor checks. Another Claude session in the same folder does not count.
-3. A message you send in its personal Buzz channel receives a reply from the correct manager and the sidebar status is fresh.
+3. A message you send in its personal Buzz channel gets 👀 after the independent watcher accepts it, then the receipt clears when the correct manager replies. Confirm the reply and fresh sidebar status; the receipt alone does not prove the Claude turn started.
 4. A small authorized task creates a worker owned by their manager. Channel members can view its live activity; viewing does not grant runtime control. The worker replies, sleeps, and wakes in the same saved conversation.
 
 New services use `buzz-manager@USER`, `buzz-manager-watch@USER`, `buzz-worker-supervisor@USER` and `buzz-workspace-reporter@USER`. Worker services use `buzz-worker-USER@SLUG`, so two people can use the same task slug. Inspect actual unit definitions for runtime and log paths. See [manager checks](s2-manager-supervisor.md) and [worker operations](s2-worker-operations.md).

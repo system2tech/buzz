@@ -370,6 +370,24 @@ class MultiUserTests(unittest.TestCase):
             self.assertEqual(env['BUZZ_ACP_OBSERVER_CHANNEL_MEMBERS'], 'true')
             self.assertNotIn('CLAUDE_CONFIG_DIR', env)
 
+    def test_remote_watcher_receipts_cover_the_control_channel_and_dms(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.buzz-key').write_text('not-a-real-key')
+            config = {'root': str(root), 'user': 'harri', 'prefix': '/opt/buzz-manager',
+                      'relay': 'wss://buzz.example.test', 'channel': 'control-channel',
+                      'tools': {'watcher': '/tools/watcher', 'buzz': '/tools/buzz'}}
+            with patch.object(workers, 'runtime_env', return_value={'HOME': '/home/harri'}), \
+                 patch.object(workers.os, 'dup2'), \
+                 patch.object(workers.os, 'execve', side_effect=RuntimeError) as execute:
+                with self.assertRaises(RuntimeError):
+                    workers.run_component(config, 'watch')
+            argv = execute.call_args.args[1]
+            self.assertIn('--receipt-dms', argv)
+            self.assertEqual(argv[argv.index('--receipt-channel') + 1], 'control-channel')
+            self.assertEqual(argv[argv.index('--state-file') + 1],
+                             str(root / 'watcher-state.json'))
+
 
 if __name__ == '__main__':
     unittest.main()

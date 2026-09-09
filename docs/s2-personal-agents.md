@@ -11,7 +11,7 @@ The manager's reasoning and conversation are one Claude Code background session.
 | Component | Purpose |
 |---|---|
 | Manager supervisor | A long-running shell script kept alive by systemd on Linux or launchd on macOS. It checks the full Claude session UUID saved in `.session-id`; if that exact session stops, it resumes the same conversation. |
-| Message watcher | Receives Buzz messages independently of Claude and appends them to `inbox.log`, including while the manager session is down. |
+| Message watcher | Receives Buzz messages independently of Claude and appends them to `inbox.log`, including while the manager session is down. In the manager's control channel and DMs it adds 👀 when it accepts an actionable message, then clears pending receipts when the manager next posts in that conversation. |
 | Manager inbox Monitor | Runs inside the Claude session, follows `inbox.log` from the saved cursor, and gives messages to the manager. It must be re-armed after a session restart. |
 | Worker supervisor | Manages task workers, including idle sleep and message-triggered wake. This is separate from the manager supervisor. |
 | Workspace reporter | Publishes manager and worker state for the Buzz desktop sidebar. It does not keep agents alive. |

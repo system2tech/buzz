@@ -21,6 +21,7 @@ fn extract_channel_metadata(e: &serde_json::Value) -> serde_json::Value {
     serde_json::json!({
         "channel_id": extract_d_tag(e),
         "name": extract_tag_value(e, "name"),
+        "channel_type": extract_tag_value(e, "t"),
         "description": extract_tag_value(e, "about"),
         "created_at": e.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0),
     })
@@ -104,6 +105,7 @@ pub async fn cmd_list_channels(
                     serde_json::json!({
                         "channel_id": c.get("channel_id").cloned().unwrap_or_default(),
                         "name": c.get("name").cloned().unwrap_or_default(),
+                        "channel_type": c.get("channel_type").cloned().unwrap_or_default(),
                     })
                 })
                 .collect();
@@ -1587,10 +1589,11 @@ pub async fn dispatch_canvas(cmd: crate::CanvasCmd, client: &BuzzClient) -> Resu
 mod tests {
     use super::{
         apply_cardinality_rule, assemble_roster_resolution, build_hint_map, build_template_report,
-        cmd_set_add_policy, fetch_candidate_hints, finalize_roster_resolution, format_candidate,
-        hints_from_results, join_bounded_queries, name_matches, resolve_roster_with_archive_filter,
-        validate_ttl_seconds, validate_update_channel_fields, ArchivedExclusion, CandidateHint,
-        ChannelSummary, ResolvedAgent, RosterResolution, SkippedSlug,
+        cmd_set_add_policy, extract_channel_metadata, fetch_candidate_hints,
+        finalize_roster_resolution, format_candidate, hints_from_results, join_bounded_queries,
+        name_matches, resolve_roster_with_archive_filter, validate_ttl_seconds,
+        validate_update_channel_fields, ArchivedExclusion, CandidateHint, ChannelSummary,
+        ResolvedAgent, RosterResolution, SkippedSlug,
     };
     use crate::client::BuzzClient;
     use crate::CliError;
@@ -1634,6 +1637,17 @@ mod tests {
         assert_eq!(s.topic.as_deref(), Some("Composer work"));
         assert_eq!(s.purpose.as_deref(), Some("Track UI for the composer"));
         assert_eq!(s.ttl_seconds, Some(3600));
+    }
+
+    #[test]
+    fn list_projection_includes_the_explicit_channel_type() {
+        let ev = event(json!([
+            ["d", "11111111-1111-1111-1111-111111111111"],
+            ["name", "DM"],
+            ["t", "dm"],
+        ]));
+        let projected = extract_channel_metadata(&ev);
+        assert_eq!(projected["channel_type"], "dm");
     }
 
     #[test]

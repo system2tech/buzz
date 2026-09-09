@@ -140,6 +140,20 @@ class LocalTests(unittest.TestCase):
         self.assertEqual(env['MRFIX_ROOT'],str(self.root))
         self.assertNotIn('BUZZ_AUTH_TAG', env)
 
+    def test_watcher_receipts_cover_the_control_channel_and_dms(self):
+        (self.root / '.buzz-key').write_text('not-a-real-key')
+        self.config.update(channel='control-channel',
+                           tools={'watcher': '/tools/watcher', 'buzz': '/tools/buzz'})
+        with patch.object(local.os, 'dup2'), \
+             patch.object(local.os, 'execve', side_effect=EndLoop) as execute:
+            with self.assertRaises(EndLoop):
+                local.run(self.config, 'watch')
+        argv = execute.call_args.args[1]
+        self.assertIn('--receipt-dms', argv)
+        self.assertEqual(argv[argv.index('--receipt-channel') + 1], 'control-channel')
+        self.assertEqual(argv[argv.index('--state-file') + 1],
+                         str(self.root / 'watcher-state.json'))
+
     def test_local_restart_stops_only_the_saved_manager_session(self):
         session_id = '12345678-1234-4234-8234-123456789abc'
         (self.root / '.session-id').write_text(session_id + '\n')
@@ -166,7 +180,9 @@ class LocalTests(unittest.TestCase):
         with patch.object(install, 'mint_pair',return_value=key), \
              patch.object(install,'pubkey',return_value='b'*64), \
              patch.object(install.subprocess,'run',return_value=SimpleNamespace(
-                 returncode=0,stdout='room --session-id --json conversation is kept')) as run:
+                 returncode=0,stdout=(
+                     'room --state-file --receipt-channel --receipt-dms '
+                     '--session-id --json conversation is kept'))) as run:
             install.install(args,shared)
             original=(root/'local.json').read_bytes()
             install.install(args,shared)

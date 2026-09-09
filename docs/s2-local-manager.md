@@ -118,7 +118,7 @@ Verify the full flow:
 
 1. Status shows the watcher, manager supervisor, worker supervisor and reporter running. Your saved full manager session ID must match the live session across two supervisor checks.
 2. Confirm the manager belongs to both its personal channel and `#agent-managers`. It reads every coordination message but does not acknowledge routine updates.
-3. Confirm the manager has a persistent inbox Monitor. Send it a short question in its new Buzz channel and confirm a reply and fresh sidebar status.
+3. Confirm the manager has a persistent inbox Monitor. Send it a short question in its new Buzz channel: 👀 should appear after the independent watcher accepts it, then clear when the manager replies. Confirm the reply and fresh sidebar status; the receipt alone does not prove the Claude turn started.
 4. Give it a small task, or run `"$RUNTIME/bin/buzz-local" spawn setup-check "Reply in this task channel and remember the word maple for the resume test."` The worker must appear beneath your manager, publish a channel reply, and show activity.
 5. In `local.json`, temporarily set `worker_idle_minutes` to `3`. Reload **only this new setup's worker supervisor** using the commands below. Leave the test worker quiet, confirm it sleeps, then message its task channel asking for the remembered word. Verify a reply and the same retained session. Restore the previous idle setting and reload the supervisor again.
 
