@@ -1,4 +1,5 @@
 """Isolated contract tests: no network, real accounts or services are changed."""
+import hashlib
 import importlib.util
 import json
 import os
@@ -503,6 +504,140 @@ class SourceProvenanceTests(unittest.TestCase):
         with patch('install_remote_managers.subprocess.run', return_value=ok) as run:
             installer.source_provenance(Path('/x'))
         self.assertIn('safe.directory=*', run.call_args_list[0].args[0])
+
+
+    def test_installed_digests_record_what_was_written(self):
+        """The check has to be runnable by the account that is exposed.
+
+        `commit` answers "is this current"; it cannot answer "is what landed
+        actually that commit". Verifying that otherwise needs a clone of the
+        repo, which the exposed box is the least likely to have.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory)
+            (prefix / 'lib').mkdir()
+            for name in installer.FILES:
+                (prefix / 'lib' / name).write_text(f'contents of {name}\n')
+            digests = installer.installed_digests(prefix)
+            self.assertEqual(sorted(digests), sorted(installer.FILES))
+            self.assertEqual(digests['remote_workers.py'],
+                             hashlib.sha256(b'contents of remote_workers.py\n').hexdigest())
+
+    def test_a_file_that_did_not_land_is_reported_not_omitted(self):
+        """A partial copy must be visible; a missing key would read as 'not checked'."""
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory)
+            (prefix / 'lib').mkdir()
+            for name in installer.FILES:
+                (prefix / 'lib' / name).write_text('x')
+            (prefix / 'lib' / 'remote_workers.py').unlink()
+            digests = installer.installed_digests(prefix)
+            self.assertIn('remote_workers.py', digests)
+            self.assertTrue(digests['remote_workers.py'].startswith('unreadable:'),
+                            digests['remote_workers.py'])
+
+    def test_digests_distinguish_an_edited_file_from_an_unchanged_one(self):
+        """Six-for-six separates a complete deploy from a tidy-looking partial one."""
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory)
+            (prefix / 'lib').mkdir()
+            for name in installer.FILES:
+                (prefix / 'lib' / name).write_text('same')
+            first = installer.installed_digests(prefix)
+            (prefix / 'lib' / 'manager_common.py').write_text('edited in place')
+            second = installer.installed_digests(prefix)
+            self.assertEqual([k for k in first if first[k] != second[k]],
+                             ['manager_common.py'])
+
+
+    def test_backups_are_not_in_the_manifest(self):
+        """`.previous` files are written by the installer but are not installed code.
+
+        Their digests can never match the merged tree, so including them would
+        hand a verifier permanent mismatches to learn to ignore -- and a check
+        with expected failures in it stops being a check.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory)
+            (prefix / 'lib').mkdir()
+            for name in installer.FILES:
+                (prefix / 'lib' / name).write_text('live')
+                (prefix / 'lib' / (name + '.previous')).write_text('older')
+            (prefix / 'lib' / '__pycache__').mkdir()
+            digests = installer.installed_digests(prefix)
+            self.assertEqual(sorted(digests), sorted(installer.FILES))
+            self.assertFalse([k for k in digests if k.endswith('.previous')])
+
+
+    def verify(self, record, files=None, extra=()):
+        """Run verify_installation against a synthetic install; return (code, output)."""
+        import io, contextlib
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        registry, lib = root / 'registry', root / 'prefix' / 'lib'
+        registry.mkdir(); lib.mkdir(parents=True)
+        for name, content in (files or {}).items():
+            (lib / name).write_text(content)
+        for name in extra:
+            (lib / name).write_text('stray')
+        (registry / 'installed-source.json').write_text(json.dumps(record))
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = installer.verify_installation(root / 'prefix', registry=registry)
+        return code, buffer.getvalue()
+
+    def test_an_install_without_a_manifest_is_unverifiable_not_verified(self):
+        """The pre-manifest record is live on the box right now.
+
+        A verifier iterating `record.get('files', {})` checks nothing and prints
+        success -- absence indistinguishable from correctness, in the feature
+        built to end exactly that.
+        """
+        code, out = self.verify({'commit': 'a' * 40, 'branch': 'HEAD', 'dirty': False})
+        self.assertEqual(code, 2)
+        self.assertIn('UNVERIFIABLE', out)
+        self.assertNotIn('VERIFIED', out.replace('UNVERIFIABLE', ''))
+
+    def test_a_missing_record_is_unverifiable(self):
+        import io, contextlib
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'prefix' / 'lib').mkdir(parents=True)
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                code = installer.verify_installation(root / 'prefix', registry=root)
+            self.assertEqual(code, 2)
+            self.assertIn('UNVERIFIABLE', buffer.getvalue())
+
+    def test_matching_files_verify(self):
+        digest = hashlib.sha256(b'live').hexdigest()
+        code, out = self.verify({'commit': 'b' * 40, 'files': {'remote_workers.py': digest}},
+                                files={'remote_workers.py': 'live'})
+        self.assertEqual(code, 0)
+        self.assertIn('VERIFIED', out)
+
+    def test_an_altered_file_fails(self):
+        digest = hashlib.sha256(b'live').hexdigest()
+        code, out = self.verify({'commit': 'c' * 40, 'files': {'remote_workers.py': digest}},
+                                files={'remote_workers.py': 'edited in place'})
+        self.assertEqual(code, 1)
+        self.assertIn('FAILED', out)
+
+    def test_a_file_named_by_the_manifest_but_absent_fails(self):
+        digest = hashlib.sha256(b'live').hexdigest()
+        code, out = self.verify({'commit': 'd' * 40, 'files': {'remote_workers.py': digest}})
+        self.assertEqual(code, 1)
+        self.assertIn('unreadable', out)
+
+    def test_a_file_the_manifest_does_not_name_is_flagged_but_backups_are_not(self):
+        digest = hashlib.sha256(b'live').hexdigest()
+        code, out = self.verify({'commit': 'e' * 40, 'files': {'remote_workers.py': digest}},
+                                files={'remote_workers.py': 'live'},
+                                extra=('remote_workers.py.previous', 'hand_edit.py'))
+        self.assertEqual(code, 0)
+        self.assertIn('UNEXPECTED hand_edit.py', out)
+        self.assertNotIn('previous', out)
 
 
 if __name__ == '__main__':

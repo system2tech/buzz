@@ -15,6 +15,7 @@ from manager_common import (COORDINATION_CHANNEL_NAME, REGISTRY, account_name,
                             as_user, atomic, buzz, claim_relay_invite, config_for,
                             exact_channel_id, human_pubkey, load_json, mint_pair,
                             paths, pubkey, relay_url, save_json,
+                            verify_installation,
                             saved_manager_session_id, secret_key, services)
 
 
@@ -420,8 +421,18 @@ def main():
     spawn.add_argument('task')
     retire = sub.add_parser('retire', help='Retire a worker, retaining its files and channel')
     retire.add_argument('slug')
+    # Deliberately on the installed wrapper rather than the installer. The account
+    # exposed to a bad deploy is the one that should be able to check it, and it is
+    # the least likely to have a checkout: the installer is not deployed anywhere.
+    # Both inputs are world-readable, so this needs no root and no clone.
+    verify = sub.add_parser('verify', help='Check installed files against the recorded manifest')
+    verify.add_argument('--prefix', default='/opt/buzz-manager')
     args = parser.parse_args()
     try:
+        if args.command == 'verify':
+            # Read-only, and useful precisely to unprivileged accounts, so it is
+            # placed before every root and account check below.
+            return verify_installation(Path(args.prefix))
         if args.command == 'prepare':
             prepare(args)
         elif args.command == 'initialize':
