@@ -8,7 +8,7 @@ There are two stages: **prepared** means the account and runtime exist; **runnin
 
 ## 1. Prepare the account — a root operator or their agent
 
-Get the current agent-server address from Verda and the relay WebSocket URL from the deployed configuration. Use the installed `/opt/buzz-manager/bin/buzz-manager`; check its `--help` before proceeding. If it is missing, an operator installs it using [the shared-tooling step](#install-the-shared-tooling-once) below.
+Get the current agent-server address from Verda — or, without console access, from [the recorded addresses](s2-operations.md#current-server-addresses) — and the relay WebSocket URL from the deployed configuration. Use the installed `/opt/buzz-manager/bin/buzz-manager`; check its `--help` before proceeding. If it is missing, an operator installs it using [the shared-tooling step](#install-the-shared-tooling-once) below.
 
 As root on the agent server, first run `buzz-manager status --all` when the tool is installed. Reuse the person's existing prepared account; do not create a second account just because its username differs from their display name.
 
