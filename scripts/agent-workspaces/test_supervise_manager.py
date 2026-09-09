@@ -19,7 +19,7 @@ def session(identity, status="busy"):
 class SupervisorTests(unittest.TestCase):
     def check_case(self, sessions, expected_launches=0, query_exit=0,
                    identity=MANAGER, expected_flag="--resume", launch_exit=0,
-                   mints=MANAGER):
+                   mints=MANAGER, noisy=False, expected_saved=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "bin").mkdir()
@@ -54,7 +54,13 @@ if "--resume" in sys.argv:
     identity = sys.argv[sys.argv.index("--resume") + 1]
 else:
     identity = os.environ["MINTS"]
-print("backgrounded · " + identity[:8])
+if os.environ.get("NOISY"):
+    # A decoy hex token, and the id wrapped in colour, which is what `claude`
+    # actually prints when the supervisor is run by hand from a terminal.
+    print("note see commit deadbeef for detail")
+    print("backgrounded · \x1b[36m" + identity[:8] + "\x1b[39m\x1b[2m (idle)\x1b[22m")
+else:
+    print("backgrounded · " + identity[:8])
 sessions = json.loads((root / "sessions").read_text())
 sessions = [s for s in sessions if s.get("sessionId") != identity]
 sessions.append(dict(id=identity[:8], sessionId=identity, kind="background",
@@ -72,7 +78,7 @@ touch "$MRFIX_ROOT/checked"
                 path.chmod(0o755)
             env = dict(os.environ, MRFIX_ROOT=str(root), MRFIX_MANAGER_CWD=str(cwd),
                        QUERY_EXIT=str(query_exit), LAUNCH_EXIT=str(launch_exit),
-                       MINTS=mints)
+                       MINTS=mints, NOISY="1" if noisy else "")
             result = subprocess.run(["bash", str(SCRIPT)], env=env, timeout=10,
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, -15, result.stderr)
@@ -90,7 +96,9 @@ touch "$MRFIX_ROOT/checked"
                 if expected_flag == "--resume":
                     self.assertEqual(launch, ["--bg", "--resume", saved])
                 self.assertEqual(launch[launch.index(expected_flag) + 1], saved)
-            if identity is not None:
+            if expected_saved is not None:
+                self.assertEqual(saved, expected_saved)
+            elif identity is not None:
                 self.assertEqual(saved, identity)
 
     def test_exact_manager_kept_with_same_folder_sibling(self):
@@ -106,6 +114,19 @@ touch "$MRFIX_ROOT/checked"
         """A fresh install dictates nothing and records what `--bg` gave back."""
         self.check_case([session(OTHER)], identity=None, expected_launches=1,
                         expected_flag=None)
+
+    def test_capture_survives_colour_and_an_earlier_hex_token(self):
+        """The id must come from the `backgrounded` line, escapes and all.
+
+        Run by hand from a terminal, `claude` colours that line: a capture that
+        does not strip escapes returns empty, and empty records no identity and
+        relaunches every tick forever. An unanchored hex match has the opposite
+        failure — it takes the first eight-hex run in the output, so a decoy
+        token in an earlier line gets recorded as the session id.
+        """
+        self.check_case([], identity=None, expected_launches=1,
+                        expected_flag=None, noisy=True,
+                        expected_saved=MANAGER[:8])
 
     def test_failed_first_launch_records_no_identity_and_retries(self):
         """A failed launch must leave no identity behind for a later resume."""
