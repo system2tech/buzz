@@ -13,6 +13,37 @@ FILES = ('manager_common.py', 'remote_manager.py', 'remote_workers.py',
          'manager_identity.py', 'workspace_reporter.py', 'supervise-manager.sh')
 
 
+def source_provenance(source):
+    """Identify the tree being installed, so a stale install is visible later.
+
+    This installer copies a working directory, so it can install anything and
+    leave no evidence but file mtimes. That is how the box ran an eight-hour-old
+    `remote_manager.py` on 2026-09-09 while its source had already dropped the
+    private-key prompt: the binary and the doc looked no different from current
+    ones.
+
+    **Kept out of the dependency-path record on purpose.** That dict is compared
+    for equality against the previous install and refuses a mismatch, so a commit
+    inside it would make every upgrade fail as though the dependencies had changed.
+    Provenance is written separately, and is descriptive rather than enforced.
+    """
+    def git(*args):
+        try:
+            done = subprocess.run(['git', '-C', str(source), *args],
+                                  capture_output=True, text=True, check=True)
+        except (subprocess.CalledProcessError, OSError):
+            return None
+        return done.stdout.strip()
+
+    commit = git('rev-parse', 'HEAD')
+    if commit is None:
+        return {'commit': None, 'branch': None, 'dirty': None,
+                'note': 'not a git checkout: nothing identifies what was installed'}
+    return {'commit': commit,
+            'branch': git('rev-parse', '--abbrev-ref', 'HEAD'),
+            'dirty': git('status', '--porcelain', '--', '.') != ''}
+
+
 def install_guides(source, prefix):
     """Install the operational Markdown snapshot beside the shared command."""
     docs = source.parent.parent / 'docs'
@@ -91,7 +122,17 @@ def main():
         alias.symlink_to(launcher)
     install_guides(source, prefix)
     save_json(REGISTRY / 'installation.json', desired, 0o644)
+    provenance = source_provenance(source)
+    save_json(REGISTRY / 'installed-source.json', provenance, 0o644)
     print(f'Installed {launcher}; no existing services were restarted')
+    if provenance['commit'] is None:
+        print('WARNING installed from a non-git tree; what landed cannot be identified later')
+    else:
+        print(f"Installed from {provenance['branch']} at {provenance['commit'][:9]}"
+              + (' with UNCOMMITTED changes' if provenance['dirty'] else ''))
+        if provenance['dirty']:
+            print('WARNING the tree had uncommitted changes; the commit above does not '
+                  'describe what was installed')
 
 
 if __name__ == '__main__':
