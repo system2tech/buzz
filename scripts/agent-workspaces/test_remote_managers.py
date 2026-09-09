@@ -411,6 +411,30 @@ class SourceProvenanceTests(unittest.TestCase):
             got = installer.source_provenance(Path(tmp))
             self.assertIsNone(got['commit'])
             self.assertIn('nothing identifies', got['note'])
+            self.assertIn('not a git repository', got['note'])
+
+    def test_reports_gits_own_reason_when_it_refuses(self):
+        """A refusal is not a missing repository, and must not read as one.
+
+        Running as root against a user-owned checkout is git's dubious-ownership
+        case. The first version of this folded that into 'not a git checkout',
+        so a clean branch was reported as unidentifiable in exactly the
+        root-runs-the-install case. The reason has to survive.
+        """
+        refusal = subprocess.CompletedProcess(
+            args=[], returncode=128, stdout='',
+            stderr="fatal: detected dubious ownership in repository at '/x'\n")
+        with patch('install_remote_managers.subprocess.run', return_value=refusal):
+            got = installer.source_provenance(Path('/x'))
+        self.assertIsNone(got['commit'])
+        self.assertIn('dubious ownership', got['note'])
+
+    def test_asks_git_to_tolerate_a_foreign_owner(self):
+        """The scoped safe.directory is the fix; assert it is actually passed."""
+        ok = subprocess.CompletedProcess(args=[], returncode=0, stdout='abc\n', stderr='')
+        with patch('install_remote_managers.subprocess.run', return_value=ok) as run:
+            installer.source_provenance(Path('/x'))
+        self.assertIn('safe.directory=*', run.call_args_list[0].args[0])
 
 
 if __name__ == '__main__':

@@ -28,20 +28,38 @@ def source_provenance(source):
     Provenance is written separately, and is descriptive rather than enforced.
     """
     def git(*args):
-        try:
-            done = subprocess.run(['git', '-C', str(source), *args],
-                                  capture_output=True, text=True, check=True)
-        except (subprocess.CalledProcessError, OSError):
-            return None
-        return done.stdout.strip()
+        """Query the tree, and say why if we cannot.
 
-    commit = git('rev-parse', 'HEAD')
+        **`safe.directory` is set for these subprocesses only.** This installer
+        runs as root against a checkout owned by an ordinary user, which is
+        git's "dubious ownership" case — it refuses, and without this the
+        provenance silently reported a clean branch as "not a git checkout",
+        failing in precisely the root-runs-the-install case that is the normal
+        one. Scoped with `-c` so nothing is written to any git config; these are
+        read-only queries and the operator has already chosen this tree by
+        running the installer out of it.
+
+        A refusal is returned with git's own reason rather than folded into
+        "not a repository", because those need different fixes and guessing
+        between them is how the first version of this misreported an install.
+        """
+        try:
+            done = subprocess.run(['git', '-c', 'safe.directory=*', '-C', str(source), *args],
+                                  capture_output=True, text=True)
+        except OSError as error:
+            return None, f'git could not be run: {error}'
+        if done.returncode != 0:
+            reason = done.stderr.strip().splitlines()
+            return None, reason[0] if reason else f'git exited {done.returncode}'
+        return done.stdout.strip(), None
+
+    commit, why = git('rev-parse', 'HEAD')
     if commit is None:
         return {'commit': None, 'branch': None, 'dirty': None,
-                'note': 'not a git checkout: nothing identifies what was installed'}
-    return {'commit': commit,
-            'branch': git('rev-parse', '--abbrev-ref', 'HEAD'),
-            'dirty': git('status', '--porcelain', '--', '.') != ''}
+                'note': f'nothing identifies what was installed: {why}'}
+    branch, _ = git('rev-parse', '--abbrev-ref', 'HEAD')
+    changes, _ = git('status', '--porcelain', '--', '.')
+    return {'commit': commit, 'branch': branch, 'dirty': changes != ''}
 
 
 def install_guides(source, prefix):
