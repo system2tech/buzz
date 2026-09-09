@@ -6,6 +6,14 @@ use crate::client::{normalize_write_response, BuzzClient};
 use crate::error::CliError;
 use crate::validate::validate_hex64;
 
+fn matching_reaction_event_id(events: &[serde_json::Value], emoji: &str) -> Option<String> {
+    events
+        .iter()
+        .find(|event| event.get("content").and_then(|content| content.as_str()) == Some(emoji))
+        .and_then(|event| event.get("id").and_then(|id| id.as_str()))
+        .map(str::to_string)
+}
+
 pub async fn cmd_add_reaction(
     client: &BuzzClient,
     event_id: &str,
@@ -54,17 +62,21 @@ pub async fn cmd_remove_reaction(
         .ok_or_else(|| CliError::Other("reactions query response is not an array".into()))?;
 
     // Find the reaction event matching the emoji
-    let reaction_event_id = arr
-        .iter()
-        .find(|ev| ev.get("content").and_then(|c| c.as_str()) == Some(emoji))
-        .and_then(|ev| ev.get("id").and_then(|id| id.as_str()))
-        .ok_or_else(|| {
-            CliError::Other(format!(
-                "no reaction with emoji '{emoji}' found for your pubkey on event {event_id}"
-            ))
-        })?;
+    let Some(reaction_event_id) = matching_reaction_event_id(arr, emoji) else {
+        // Removal is a desired-state operation. A previous request may have
+        // succeeded while its response was lost, or the user may have removed
+        // the reaction themselves. Either way the requested state already holds.
+        println!(
+            "{}",
+            serde_json::json!({
+                "accepted": true,
+                "message": "reaction already absent",
+            })
+        );
+        return Ok(());
+    };
 
-    let reaction_eid = EventId::parse(reaction_event_id)
+    let reaction_eid = EventId::parse(&reaction_event_id)
         .map_err(|e| CliError::Other(format!("invalid reaction event ID: {e}")))?;
 
     let builder = buzz_sdk::build_remove_reaction(reaction_eid)
@@ -75,6 +87,31 @@ pub async fn cmd_remove_reaction(
     let resp = client.submit_event(event).await?;
     println!("{}", normalize_write_response(&resp));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::matching_reaction_event_id;
+    use serde_json::json;
+
+    #[test]
+    fn matching_reaction_returns_only_the_requested_emoji() {
+        let events = vec![
+            json!({"id": "heart-id", "content": "❤️"}),
+            json!({"id": "eyes-id", "content": "👀"}),
+        ];
+        assert_eq!(
+            matching_reaction_event_id(&events, "👀").as_deref(),
+            Some("eyes-id")
+        );
+        assert_eq!(matching_reaction_event_id(&events, "💬"), None);
+    }
+
+    #[test]
+    fn malformed_reaction_events_do_not_look_present() {
+        let events = vec![json!({"content": "👀"}), json!({"id": 7, "content": "👀"})];
+        assert_eq!(matching_reaction_event_id(&events, "👀"), None);
+    }
 }
 
 pub async fn cmd_get_reactions(client: &BuzzClient, event_id: &str) -> Result<(), CliError> {

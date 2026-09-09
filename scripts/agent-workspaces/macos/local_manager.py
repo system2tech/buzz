@@ -479,7 +479,9 @@ def run(config, component, slug=None):
     if component == 'watch':
         from manager_common import http_relay
         argv = [tools['watcher'], 'buzz-watch', '--keyfile', str(root / '.buzz-key'),
-                '--relay', http_relay(config['relay']), '--binary', tools['buzz'], '--subscribe', 'room']
+                '--relay', http_relay(config['relay']), '--binary', tools['buzz'],
+                '--subscribe', 'room', '--state-file', str(root / 'watcher-state.json'),
+                '--receipt-channel', config['channel'], '--receipt-dms']
         with (root / 'inbox.log').open('a') as out, (root / 'watch.err').open('a') as err:
             os.dup2(out.fileno(), 1)
             os.dup2(err.fileno(), 2)

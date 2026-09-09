@@ -33,7 +33,8 @@ def install(args, shared_source=None):
             raise ValueError(name + ' must name an installed executable')
     subprocess.run([tools['python'], '-c', 'import coincurve'], check=True, capture_output=True)
     subprocess.run([tools['buzz'], 'agent-workspace', 'publish', '--help'], check=True, capture_output=True)
-    capability_checks = [(tools['watcher'], ['buzz-watch', '--help'], ['room']),
+    capability_checks = [(tools['watcher'], ['buzz-watch', '--help'],
+                          ['room', '--state-file', '--receipt-channel', '--receipt-dms']),
                          (tools['claude'], ['--help', '--verbose'], ['--session-id']),
                          (tools['claude'], ['agents', '--help'], ['--json']),
                          (tools['claude'], ['stop', '--help'], ['conversation is kept'])]

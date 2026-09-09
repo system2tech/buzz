@@ -104,6 +104,11 @@ def main():
     subprocess.run([tools['python'], '-c', 'import coincurve'], check=True)
     subprocess.run([tools['buzz'], 'agent-workspace', 'publish', '--help'],
                    stdout=subprocess.DEVNULL, check=True)
+    watcher_help = subprocess.run([tools['watcher'], 'buzz-watch', '--help'],
+                                  capture_output=True, text=True, check=True).stdout
+    required_watcher_flags = ('room', '--state-file', '--receipt-channel', '--receipt-dms')
+    if not all(flag in watcher_help for flag in required_watcher_flags):
+        parser.error('Watcher is missing manager receipt-reaction support')
     source = Path(__file__).resolve().parent
     for name in FILES:
         if not (source / name).is_file():
