@@ -117,6 +117,8 @@ Signing in is not sufficient. The manager runs `claude --bg --permission-mode by
 
 Then exit. It is a human step by nature — you are accepting terms, and it grants bypass against your own login — which is why it belongs here rather than in your agent's half.
 
+**Expect the full first-run flow, not a single confirmation.** If this account has never run Claude interactively, that command starts setup from the top — theme, trust, the lot — rather than showing one disclaimer prompt. That is normal and it surprised the first person through it. Complete it to the end; signing in earlier does not shorten it, because the sign-in and the first-run flow record different things.
+
 **Skipping it fails in a way nothing points at.** `auth status` reports you logged in, `status` reports its checks green, all four services show active, and `exact_manager_running` stays false with no explanation. The only tell is in `supervise.log`:
 
 ```
