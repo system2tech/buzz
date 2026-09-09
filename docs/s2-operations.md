@@ -16,9 +16,20 @@ For first-time personal setup, start at [personal agents](s2-personal-agents.md)
 | Understand the manager/task sidebar and reporter | [Sidebar protocol and setup](manager-task-sidebar.md) |
 | Review our differences from upstream | [Fork changes](../S2-CHANGES.md) |
 
+## Current server addresses
+
+```
+ssh root@95.133.254.79  # relay        (relay-fin-03)
+ssh root@95.133.254.83  # agent server (agents-fin-03)
+```
+
+Verified 2026-09-09 from the agent server's own interface and an external echo. **Verda remains authoritative if these differ** — an address written into a document goes stale silently, so treat a mismatch as this file being out of date, not the console.
+
+Recorded here because the alternative was worse: the Verda console needs a shared human login, so an operator or agent without it previously had no way to obtain either address from the repository at all, and onboarding stalled there on 2026-09-09.
+
 ## Where current values come from
 
-- **IPs, instance sizes, location, OS/data volumes, SSH keys:** the team's Verda project and each instance's attached volumes. Record server roles in Verda's names/descriptions so detached volumes remain identifiable.
+- **IPs, instance sizes, location, OS/data volumes, SSH keys:** the team's Verda project and each instance's attached volumes. Record server roles in Verda's names/descriptions so detached volumes remain identifiable. The two current server addresses are also recorded above for operators without console access; Verda wins on any disagreement.
 - **Public relay hostname and DNS:** the deployed Compose `.env` (`BUZZ_DOMAIN`) and the matching Cloudflare zone.
 - **Relay image:** the retained Compose `.env` (`BUZZ_IMAGE`) and running container image. Preserve it during recovery; an upgrade is a separate task.
 - **Agent account, paths and unit names:** systemd unit definitions; on macOS, the installed LaunchAgent definitions.
