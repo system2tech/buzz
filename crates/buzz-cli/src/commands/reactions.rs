@@ -89,31 +89,6 @@ pub async fn cmd_remove_reaction(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::matching_reaction_event_id;
-    use serde_json::json;
-
-    #[test]
-    fn matching_reaction_returns_only_the_requested_emoji() {
-        let events = vec![
-            json!({"id": "heart-id", "content": "❤️"}),
-            json!({"id": "eyes-id", "content": "👀"}),
-        ];
-        assert_eq!(
-            matching_reaction_event_id(&events, "👀").as_deref(),
-            Some("eyes-id")
-        );
-        assert_eq!(matching_reaction_event_id(&events, "💬"), None);
-    }
-
-    #[test]
-    fn malformed_reaction_events_do_not_look_present() {
-        let events = vec![json!({"content": "👀"}), json!({"id": 7, "content": "👀"})];
-        assert_eq!(matching_reaction_event_id(&events, "👀"), None);
-    }
-}
-
 pub async fn cmd_get_reactions(client: &BuzzClient, event_id: &str) -> Result<(), CliError> {
     validate_hex64(event_id)?;
     let filter = serde_json::json!({
@@ -171,5 +146,30 @@ pub async fn dispatch(cmd: crate::ReactionsCmd, client: &BuzzClient) -> Result<(
         } => cmd_add_reaction(client, &event, &emoji, emoji_url.as_deref()).await,
         ReactionsCmd::Remove { event, emoji } => cmd_remove_reaction(client, &event, &emoji).await,
         ReactionsCmd::Get { event } => cmd_get_reactions(client, &event).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::matching_reaction_event_id;
+    use serde_json::json;
+
+    #[test]
+    fn matching_reaction_returns_only_the_requested_emoji() {
+        let events = vec![
+            json!({"id": "heart-id", "content": "❤️"}),
+            json!({"id": "eyes-id", "content": "👀"}),
+        ];
+        assert_eq!(
+            matching_reaction_event_id(&events, "👀").as_deref(),
+            Some("eyes-id")
+        );
+        assert_eq!(matching_reaction_event_id(&events, "💬"), None);
+    }
+
+    #[test]
+    fn malformed_reaction_events_do_not_look_present() {
+        let events = vec![json!({"content": "👀"}), json!({"id": 7, "content": "👀"})];
+        assert_eq!(matching_reaction_event_id(&events, "👀"), None);
     }
 }
