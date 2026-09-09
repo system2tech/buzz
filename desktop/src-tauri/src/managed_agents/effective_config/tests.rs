@@ -45,6 +45,7 @@ fn record(
         persona_id: persona_id.map(str::to_string),
         private_key_nsec: "".to_string(),
         auth_tag: None,
+        manager_channel_id: None,
         relay_url: "ws://localhost:3000".to_string(),
         avatar_url: None,
         acp_command: "buzz-acp".to_string(),

@@ -69,6 +69,7 @@ mod tests {
             persona_id: None,
             private_key_nsec: String::new(),
             auth_tag: None,
+            manager_channel_id: None,
             relay_url: String::new(),
             avatar_url: None,
             acp_command: String::new(),

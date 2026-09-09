@@ -8,12 +8,12 @@ use crate::{
     managed_agents::{
         build_managed_agent_summary, current_instance_id, ensure_persona_is_active,
         find_managed_agent_mut, load_managed_agents, load_personas, load_teams,
-        managed_agent_avatar_url, normalize_agent_args, resolve_provider_binary,
-        save_managed_agents, start_managed_agent_process, stop_managed_agent_process,
-        stop_managed_agent_workspace_pair, sync_managed_agent_processes, try_regenerate_nest,
-        validate_provider_config, BackendKind, CreateManagedAgentRequest,
-        CreateManagedAgentResponse, ManagedAgentRecord, ManagedAgentSummary, RelayMeshConfig,
-        DEFAULT_ACP_COMMAND, DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
+        normalize_agent_args, resolve_provider_binary, save_managed_agents,
+        start_managed_agent_process, stop_managed_agent_process, stop_managed_agent_workspace_pair,
+        sync_managed_agent_processes, try_regenerate_nest, validate_provider_config, BackendKind,
+        CreateManagedAgentRequest, CreateManagedAgentResponse, ManagedAgentRecord,
+        ManagedAgentSummary, RelayMeshConfig, DEFAULT_ACP_COMMAND, DEFAULT_AGENT_PARALLELISM,
+        DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
     },
     relay::{relay_ws_url_with_override, sync_managed_agent_profile},
     util::now_iso,
@@ -26,6 +26,11 @@ pub(super) fn workspace_owner_hex(state: &AppState) -> Result<String, String> {
     Ok(keys.public_key().to_hex())
 }
 
+#[path = "agents_create.rs"]
+mod create;
+#[path = "agents_local.rs"]
+pub(crate) mod local_agent;
+use create::{normalize_relay_mesh, resolve_created_avatar_url, trim_to_optional_string};
 #[path = "agents_pending.rs"]
 mod pending;
 #[cfg(test)]
@@ -52,51 +57,6 @@ pub(super) fn summarize_from_disk(
         &load_teams(app).unwrap_or_default(),
         &crate::managed_agents::load_global_agent_config(app).unwrap_or_default(),
     )
-}
-
-fn normalize_relay_mesh(
-    config: Option<&RelayMeshConfig>,
-    backend: &BackendKind,
-) -> Result<Option<RelayMeshConfig>, String> {
-    let Some(config) = config else {
-        return Ok(None);
-    };
-
-    let model_ref = config.model_ref.trim();
-    if model_ref.is_empty() {
-        return Err("Buzz shared compute model is required".to_string());
-    }
-    if backend != &BackendKind::Local {
-        return Err("Buzz shared compute agents must use the local backend".to_string());
-    }
-
-    Ok(Some(RelayMeshConfig {
-        model_ref: model_ref.to_string(),
-    }))
-}
-
-fn trim_to_optional_string(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-fn resolve_created_avatar_url(
-    requested_avatar_url: Option<&str>,
-    persona_avatar_url: Option<String>,
-    agent_command: &str,
-) -> Option<String> {
-    requested_avatar_url
-        .and_then(trim_to_optional_string)
-        .or_else(|| {
-            persona_avatar_url
-                .as_deref()
-                .and_then(trim_to_optional_string)
-        })
-        .or_else(|| managed_agent_avatar_url(agent_command))
 }
 
 #[cfg(feature = "mesh-llm")]
@@ -390,6 +350,7 @@ pub async fn create_managed_agent(
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     validate_create_definition(&name, requested_persona_id.as_deref(), &input)?;
+    local_agent::validate_local_agent_request(&input)?;
     if let Some(parallelism) = input.parallelism {
         if !(1..=32).contains(&parallelism) {
             return Err("parallelism must be between 1 and 32".to_string());
@@ -473,20 +434,23 @@ pub async fn create_managed_agent(
     // ── Phase 2: compute NIP-OA auth tag (sync) ──────────────────────────────
     // Agents authenticate via the auth tag in their kind:0 profile event.
     // No tokens are minted. Fail closed: bad auth tag → don't create agent.
-    let auth_tag = {
-        let owner_keys = state.signing_keys()?;
-        // Bridge nostr 0.37 → 0.36 (buzz-sdk) via hex round-trip.
-        let compat_owner = nostr::Keys::parse(&owner_keys.secret_key().to_secret_hex())
-            .map_err(|e| format!("failed to bridge owner keys: {e}"))?;
-        let compat_agent = nostr::PublicKey::from_hex(&agent_keys.public_key().to_hex())
-            .map_err(|e| format!("failed to bridge agent pubkey: {e}"))?;
-        let tag = buzz_sdk_pkg::nip_oa::compute_auth_tag(&compat_owner, &compat_agent, "")
-            .map_err(|e| format!("failed to compute NIP-OA auth tag: {e}"))?;
-        Some(tag)
-    };
+    let mut local_creation =
+        local_agent::prepare_local_agent_creation(&state, &input, &agent_keys)?;
+    let auth_tag = local_creation.auth_tag.clone();
+
+    // Independent local managers consume a one-use admission, create their
+    // own conversation, and join #agent-managers before their local record is
+    // committed or process is started.
+    let provisioned_local_agent = local_agent::provision_requested_local_agent(
+        &state,
+        &mut local_creation,
+        &agent_keys,
+        &name,
+    )
+    .await?;
 
     // ── Phase 3: save record (sync lock) ───────────────────────────────────────
-    let (agent, resolved_avatar_url) = {
+    let saved_record = (|| -> Result<(ManagedAgentSummary, Option<String>), String> {
         let _store_guard = state
             .managed_agents_store_lock
             .lock()
@@ -645,6 +609,9 @@ pub async fn create_managed_agent(
             team_id,
             private_key_nsec: private_key_nsec.clone(),
             auth_tag: auth_tag.clone(),
+            manager_channel_id: provisioned_local_agent
+                .as_ref()
+                .map(|provisioned| provisioned.channel_id.clone()),
             relay_url: resolved_relay_url.clone(),
             avatar_url: resolved_avatar_url.clone(),
             acp_command: input
@@ -739,16 +706,35 @@ pub async fn create_managed_agent(
         // before any .await — owner-authored, every agent (Will's ruling: no
         // is_builtin/persona-membership gate).
         retain_managed_agent_pending(&app, &state, record);
-        (
+        Ok((
             summarize_from_disk(&app, record, &runtimes)?,
             resolved_avatar_url,
-        )
+        ))
+    })();
+    let (agent, resolved_avatar_url) = match saved_record {
+        Ok(saved) => saved,
+        Err(error) => {
+            if let Some(provisioned) = provisioned_local_agent.as_ref() {
+                local_agent::rollback_provisioned_local_agent(&state, provisioned, &agent_keys)
+                    .await;
+            }
+            return Err(error);
+        }
     };
 
     // ── Phase 3b: local spawn (async preflight outside store lock) ───────────
     let mut spawn_error = None;
     let agent = if input.spawn_after_create && input.backend == BackendKind::Local {
-        match start_local_agent_with_preflight(&app, &state, &pubkey, true, None, None).await {
+        match start_local_agent_with_preflight(
+            &app,
+            &state,
+            &pubkey,
+            true,
+            local_creation.expected_relay_url.as_deref(),
+            local_creation.expected_signer_pubkey.as_deref(),
+        )
+        .await
+        {
             Ok(agent) => agent,
             Err(error) => {
                 let _store_guard = state
@@ -781,9 +767,10 @@ pub async fn create_managed_agent(
     // ── Phase 4: sync agent profile on relay (async, outside lock) ───────────
     // Use the avatar persisted on the record so the published profile and any
     // later reconciliation agree on the same value.
-    let profile_relay_url = crate::relay::effective_agent_relay_url(
+    let profile_relay_url = local_agent::profile_relay_url(
+        &state,
+        provisioned_local_agent.as_ref(),
         &resolved_relay_url,
-        &relay_ws_url_with_override(&state),
     );
     let mut profile_sync_error = (sync_managed_agent_profile(
         &state,
@@ -795,6 +782,14 @@ pub async fn create_managed_agent(
     )
     .await)
         .err();
+    profile_sync_error = local_agent::merge_initial_workspace_status_error(
+        &state,
+        provisioned_local_agent.as_ref(),
+        &agent_keys,
+        spawn_error.is_none(),
+        profile_sync_error,
+    )
+    .await;
     profile_sync_error =
         super::agent_models::flush_managed_agent_policy(&app, &state, profile_sync_error).await;
 
@@ -1095,6 +1090,9 @@ pub async fn delete_managed_agent(
     app: AppHandle,
 ) -> Result<(), String> {
     use tauri::Manager;
+
+    local_agent::deprovision_before_delete(&app, &pubkey).await?;
+
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         {
@@ -1136,6 +1134,7 @@ pub async fn delete_managed_agent(
                 }
             }
 
+            let direct_local_manager = local_agent::is_direct_local_manager(&records, &pubkey);
             if let Some(record) = records.iter_mut().find(|record| record.pubkey == pubkey) {
                 stop_managed_agent_process(&app, record, &mut runtimes)?;
             }
@@ -1147,12 +1146,7 @@ pub async fn delete_managed_agent(
             }
             save_managed_agents(&app, &records)?;
             crate::managed_agents::delete_agent_key(&pubkey);
-            // Tombstone after confirmed removal (inside lock; every published
-            // agent tombstones). The NIP-IA kind:9035 archive request — which
-            // stops the identity appearing in member pickers and autocomplete —
-            // is enqueued in the SAME transaction, its `persona_id` derived from
-            // the retained 30177 head.
-            tombstone_managed_agent_pending(&app, &state, &pubkey);
+            local_agent::tombstone_after_delete(&app, &state, &pubkey, direct_local_manager);
         }
         try_regenerate_nest(&app);
         Ok(())

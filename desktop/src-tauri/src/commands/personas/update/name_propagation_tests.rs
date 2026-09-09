@@ -10,6 +10,7 @@ fn agent(persona_id: &str, name: &str, display_name: Option<&str>) -> ManagedAge
         persona_id: Some(persona_id.to_string()),
         private_key_nsec: String::new(),
         auth_tag: None,
+        manager_channel_id: None,
         relay_url: String::new(),
         avatar_url: None,
         acp_command: String::new(),

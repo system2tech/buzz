@@ -115,7 +115,7 @@ export type RawManagedAgent = {
   pubkey: string;
   name: string;
   persona_id: string | null;
-  // Optional: pre-feature fixtures may omit it. The record's harness/runtime id.
+  manager_channel_id?: string | null;
   runtime?: string | null;
   team_id?: string | null;
   relay_url: string;
@@ -317,9 +317,7 @@ export function fromRawFeedItem(item: RawFeedItem) {
     createdAt: item.created_at,
     channelId: item.channel_id,
     channelName: item.channel_name,
-    // Canonicalize the wire `null` to undefined so FeedItem's optional
-    // channelType contract holds at runtime (enrichment and the DM
-    // notification filter both key off `=== undefined`).
+    // Keep missing channel types undefined for enrichment and DM filtering.
     channelType: item.channel_type ?? undefined,
     tags: item.tags,
     category: item.category,
@@ -631,6 +629,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     pubkey: agent.pubkey,
     name: agent.name,
     personaId: agent.persona_id,
+    managerChannelId: agent.manager_channel_id ?? null,
     runtime: agent.runtime ?? null,
     teamId: agent.team_id ?? null,
     relayUrl: agent.relay_url,
@@ -809,6 +808,7 @@ export async function createManagedAgent(input: CreateManagedAgentInput) {
         respondTo: input.respondTo,
         respondToAllowlist: input.respondToAllowlist,
         relayMesh: input.relayMesh,
+        localAgentSetup: input.localAgentSetup,
       },
     },
   );

@@ -127,6 +127,12 @@ pub(crate) fn retain_agent_record(
     keys: &nostr::Keys,
     record: &ManagedAgentRecord,
 ) -> Result<bool, String> {
+    // Quick-created managers are relay members in their own right. Publishing
+    // an owner-authored 30177 record for one would reclassify it as the
+    // creating human's managed identity and break member-to-member discovery.
+    if record.manager_channel_id.is_some() {
+        return Ok(false);
+    }
     let owner_pubkey = keys.public_key().to_hex();
     let existing = get_retained_event(conn, KIND_MANAGED_AGENT, &owner_pubkey, &record.pubkey)?;
 

@@ -188,6 +188,20 @@ pub struct CreateManagedAgentRequest {
     pub respond_to_allowlist: Vec<String>,
     #[serde(default)]
     pub relay_mesh: Option<RelayMeshConfig>,
+    /// Provision this local agent as an independent relay member with its own
+    /// manager conversation. Absent for ordinary owner-attested agents.
+    #[serde(default)]
+    pub local_agent_setup: Option<LocalAgentSetupRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAgentSetupRequest {
+    pub channel_name: String,
+    /// Workspace scope captured by the UI before creation began. The backend
+    /// re-checks both values immediately before the first relay side effect.
+    pub expected_relay_url: String,
+    pub expected_signer_pubkey: String,
 }
 
 /// Patch request for updating a managed agent's mutable fields.

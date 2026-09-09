@@ -110,6 +110,7 @@ impl AgentDefinition {
             persona_id: None,
             private_key_nsec: String::new(),
             auth_tag: None,
+            manager_channel_id: None,
             relay_url: String::new(),
             avatar_url: self.avatar_url,
             acp_command: DEFAULT_ACP_COMMAND.to_string(),
@@ -247,6 +248,11 @@ pub struct ManagedAgentRecord {
     /// Re-attestation requires agent recreation (v2 migration scope).
     #[serde(default)]
     pub auth_tag: Option<String>,
+    /// Control conversation for a locally hosted independent manager. Its
+    /// presence distinguishes a direct relay member from legacy auth-less
+    /// owner agents and keeps the relationship durable across app restarts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manager_channel_id: Option<String>,
     pub relay_url: String,
     /// Avatar URL resolved at creation time (user-supplied input, else the
     /// command-based fallback). Persisted so startup reconciliation compares
@@ -495,6 +501,7 @@ pub struct ManagedAgentSummary {
     pub pubkey: String,
     pub name: String,
     pub persona_id: Option<String>,
+    pub manager_channel_id: Option<String>,
     /// The record's harness/runtime id (mirror of `ManagedAgentRecord.runtime`).
     /// Lets the UI count agents referencing a harness definition (e.g. in the
     /// delete-confirmation flow). `None` = inherit from the linked persona.

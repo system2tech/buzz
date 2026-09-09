@@ -115,6 +115,7 @@ export function AppSidebar({
   onUpdateCommunity,
   onRemoveCommunity,
   onCreateAgent,
+  onCreateLocalAgent,
   onSelectAgents,
   onSelectProjects,
   onSelectPulse,
@@ -592,6 +593,7 @@ export function AppSidebar({
                     connected={agentWorkspaces.connected}
                     relayUrl={activeCommunity?.relayUrl}
                     currentPubkey={currentPubkey}
+                    onCreateLocalAgent={onCreateLocalAgent}
                     isActiveChannel={selectedView === "channel"}
                     selectedChannelId={selectedChannelId}
                     activeWorkingByChannelId={activeWorkingByChannelId}

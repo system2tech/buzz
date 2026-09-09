@@ -512,6 +512,13 @@ pub fn run() {
                         tokio::time::sleep(Duration::from_secs(30)).await;
                     }
                 });
+
+                // Independent local managers use a short relay lease for the
+                // sidebar's live state. Refresh it natively so backgrounded
+                // webviews do not make a healthy manager look unknown.
+                tauri::async_runtime::spawn(
+                    crate::commands::local_agent::run_local_agent_reporter(app.handle().clone()),
+                );
             }
             Ok(())
         })

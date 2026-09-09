@@ -720,6 +720,7 @@ fn summary_fixture(
         pubkey: "aa".repeat(32),
         name: "test".into(),
         persona_id: None,
+        manager_channel_id: None,
         runtime: None,
         team_id: None,
         relay_url: String::new(),

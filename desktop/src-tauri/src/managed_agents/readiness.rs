@@ -2,8 +2,7 @@
 //!
 //! # Overview
 //!
-//! Before spawning a managed agent (or before deciding whether to enter
-//! setup-mode nudge), the desktop must know whether the agent has every
+//! Before spawning an agent or entering setup-mode nudge, Desktop must know whether it has every
 //! piece of configuration it will need to start successfully. This module
 //! provides:
 //!
@@ -1481,6 +1480,7 @@ mod tests {
             persona_id: None,
             private_key_nsec: String::new(),
             auth_tag: None,
+            manager_channel_id: None,
             relay_url: String::new(),
             avatar_url: None,
             acp_command: "buzz-acp".to_string(),

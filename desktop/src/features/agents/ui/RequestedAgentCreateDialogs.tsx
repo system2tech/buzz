@@ -6,6 +6,7 @@ import {
   type OpenCreateAgentOptions,
 } from "@/features/agents/openCreateAgentEvent";
 import { AgentDialog } from "./AgentDialog";
+import { RequestedLocalAgentDialog } from "./RequestedLocalAgentDialog";
 import { usePersonaActions } from "./usePersonaActions";
 
 /** App-level create flow so contextual entry points do not navigate away. */
@@ -63,6 +64,7 @@ export function RequestedAgentCreateDialogs() {
           }
         />
       ) : null}
+      <RequestedLocalAgentDialog />
     </>
   );
 }

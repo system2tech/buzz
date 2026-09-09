@@ -100,7 +100,7 @@ pub(crate) fn build_respond_to_env_with_policy(
         remove.push("BUZZ_ACP_RESPOND_TO_ALLOWLIST");
     }
 
-    if record.auth_tag.is_none() {
+    if record.auth_tag.is_none() && record.manager_channel_id.is_none() {
         if let Some(owner) = owner_hex {
             set.push(("BUZZ_ACP_AGENT_OWNER", owner.to_string()));
         } else {
@@ -186,5 +186,21 @@ mod tests {
                 "owner-only provider payload retained {label} agent allowlist",
             );
         }
+    }
+
+    #[test]
+    fn direct_local_manager_does_not_impersonate_the_current_human() {
+        let mut direct = record(BackendKind::Local);
+        direct.manager_channel_id = Some("11111111-1111-4111-8111-111111111111".into());
+        let (set, remove) =
+            build_respond_to_env_with_policy(&direct, Some("human"), false).unwrap();
+        assert!(!set.iter().any(|(name, _)| *name == "BUZZ_ACP_AGENT_OWNER"));
+        assert!(remove.contains(&"BUZZ_ACP_AGENT_OWNER"));
+
+        let legacy = record(BackendKind::Local);
+        let (set, _) = build_respond_to_env_with_policy(&legacy, Some("human"), false).unwrap();
+        assert!(set
+            .iter()
+            .any(|(name, value)| { *name == "BUZZ_ACP_AGENT_OWNER" && value == "human" }));
     }
 }

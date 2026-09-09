@@ -11,6 +11,7 @@ mod agent_providers;
 mod agent_settings;
 mod agent_update_rollback;
 mod agents;
+pub(crate) use agents::local_agent;
 mod canvas;
 mod channel_reconnect_repair;
 mod channel_templates;

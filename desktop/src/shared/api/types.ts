@@ -306,11 +306,8 @@ export type ManagedAgent = {
   pubkey: string;
   name: string;
   personaId: string | null;
-  /**
-   * The record's harness/runtime id (e.g. "goose", "my-custom-harness").
-   * `null` means the agent inherits its harness from the linked persona.
-   * Used to count agents referencing a harness definition (delete confirm).
-   */
+  managerChannelId?: string | null;
+  /** Runtime id; `null` inherits from the linked persona. */
   runtime: string | null;
   teamId?: string | null;
   relayUrl: string;
@@ -401,12 +398,7 @@ export type CreateManagedAgentInput = {
   relayUrl?: string;
   acpCommand?: string;
   agentCommand?: string;
-  /**
-   * True when `agentCommand` is a runtime command the caller deliberately wants
-   * to preserve instead of inheriting the linked persona command. This covers
-   * deploy-dialog runtime selections and discovered or installed aliases for the
-   * same persona runtime id, while still ignoring missing-runtime fallbacks.
-   */
+  /** Preserve an explicitly selected runtime instead of inheriting the persona. */
   harnessOverride?: boolean;
   agentArgs?: string[];
   mcpCommand?: string;
@@ -430,6 +422,11 @@ export type CreateManagedAgentInput = {
    */
   respondToAllowlist?: string[];
   relayMesh?: RelayMeshConfig;
+  localAgentSetup?: {
+    channelName: string;
+    expectedRelayUrl: string;
+    expectedSignerPubkey: string;
+  };
 };
 
 export type CreateManagedAgentResponse = {

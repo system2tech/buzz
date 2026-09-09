@@ -400,3 +400,23 @@ fn retain_agent_record_is_noop_when_unchanged() {
         "no pending_sync churn for an unchanged record"
     );
 }
+
+#[test]
+fn direct_local_manager_is_not_published_as_an_owned_agent() {
+    let dir = TempDir::new().unwrap();
+    let keys = nostr::Keys::generate();
+    let conn = open_retention_db(&dir.path().join("retention.db")).unwrap();
+    let pubkey = "7".repeat(64);
+    let mut record = sample_record(&pubkey, "independent-manager");
+    record.manager_channel_id = Some("11111111-1111-4111-8111-111111111111".into());
+
+    assert!(!retain_agent_record(&conn, &keys, &record).unwrap());
+    assert!(get_retained_event(
+        &conn,
+        KIND_MANAGED_AGENT,
+        &keys.public_key().to_hex(),
+        &pubkey,
+    )
+    .unwrap()
+    .is_none());
+}

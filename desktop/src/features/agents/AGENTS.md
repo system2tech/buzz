@@ -252,6 +252,23 @@ with a TypeScript lookup table or an id comparison in a component.
 
 15. **Databricks model discovery has one shared catalog authority.** Desktop and ACP call the shared `buzz-agent` discovery library; Desktop passes the effective merged `DATABRICKS_MODEL_FILTER` explicitly, and the library applies it to raw workspace endpoint IDs and Unity Catalog model-service FQNs after the additive union. A successful filtered-empty catalog is authoritative: it stays empty, disables switching, and never falls through to configured or known-model fallback. UC FQNs are catalog data and always use the MLflow Chat Completions route, regardless of family-looking text in their components.
 
+16. **A quick-created local manager is an independent workspace member.**
+    `localAgentSetup` is the explicit create-time marker: Desktop generates the
+    identity, claims a one-use relay invite with that identity, creates its
+    private manager channel, adds the creating human, and joins the single
+    active open `#agent-managers` channel before saving or starting the local
+    runtime. Persist `manager_channel_id` so restarts keep this direct-member
+    behavior; do not add `BUZZ_ACP_AGENT_OWNER`, a NIP-OA owner tag, or an
+    owner-authored kind:30177 record for these identities. Bind the relay and
+    signer before side effects and carry that scope through start and profile
+    publication. The quick-create surface always uses shared access and
+    therefore renders the canonical local-machine access warning from
+    `agentAccessWarningText`. Deletion stops the local process first, then
+    deletes its manager channel and removes the direct relay membership before
+    deleting the local record and key; keep the on-disk record when relay
+    cleanup fails so the user can retry. Legacy managed agents without this
+    marker retain their existing owner fallback.
+
 ## The tests that enforce this
 
 - `lib/agentConfigCore.test.mjs` — field model per harness × scope, clearing

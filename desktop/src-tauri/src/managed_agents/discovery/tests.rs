@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use super::overrides::{divergent_agent_command_override, update_time_agent_command_override};
 use super::{
     apply_agent_command_update, classify_runtime, codex_adapter_availability,
@@ -10,6 +8,7 @@ use super::{
     BUZZ_AGENT_AVATAR_URL, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL, GOOSE_AVATAR_URL,
 };
 use crate::managed_agents::AcpAvailabilityStatus;
+use std::path::PathBuf;
 
 #[test]
 fn resolves_known_avatar_for_bare_command() {
@@ -217,6 +216,7 @@ fn record_with(
         persona_id: persona_id.map(str::to_string),
         private_key_nsec: String::new(),
         auth_tag: None,
+        manager_channel_id: None,
         relay_url: String::new(),
         avatar_url: None,
         acp_command: String::new(),

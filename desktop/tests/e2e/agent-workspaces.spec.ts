@@ -227,3 +227,58 @@ test("manager tasks preserve channel behavior through sleep, wake, collapse and 
     .getByTestId("agent-workspaces")
     .screenshot({ path: "test-results/agent-workspaces-collapsed-unread.png" });
 });
+
+test("quick create wires an independent local manager from the sidebar", async ({
+  page,
+}) => {
+  await installMockBridge(page);
+  await page.goto("/");
+
+  await page.getByTestId("create-local-agent").click();
+  const dialog = page.getByRole("dialog", { name: "Create local agent" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId("local-agent-access-warning")).toContainText(
+    "Anyone can use this agent to access your computer",
+  );
+
+  await dialog
+    .getByRole("textbox", { name: "Name", exact: true })
+    .fill("Morning coordinator");
+  await dialog
+    .getByLabel("Role")
+    .fill("Collect manager updates and write the daily digest.");
+  await dialog
+    .getByRole("textbox", { name: "Channel name", exact: true })
+    .fill("#morning-coordinator");
+  await dialog.getByRole("button", { name: "Create and start" }).click();
+  await expect(dialog).toBeHidden();
+
+  const createInput = await page.evaluate(() => {
+    const call = [...(window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [])]
+      .reverse()
+      .find((entry) => entry.command === "create_managed_agent");
+    return (call?.payload as { input?: Record<string, unknown> } | null)?.input;
+  });
+  expect(createInput).toMatchObject({
+    name: "Morning coordinator",
+    backend: { type: "local" },
+    respondTo: "anyone",
+    spawnAfterCreate: true,
+    startOnAppLaunch: true,
+    localAgentSetup: {
+      channelName: "morning-coordinator",
+    },
+  });
+  expect(createInput?.systemPrompt).toContain(
+    "Collect manager updates and write the daily digest.",
+  );
+  expect(createInput?.systemPrompt).toContain("#morning-coordinator");
+  expect(
+    (createInput?.localAgentSetup as { expectedRelayUrl?: string })
+      .expectedRelayUrl,
+  ).toBe(createInput?.relayUrl);
+  expect(
+    (createInput?.localAgentSetup as { expectedSignerPubkey?: string })
+      .expectedSignerPubkey,
+  ).toMatch(/^[0-9a-f]{64}$/);
+});

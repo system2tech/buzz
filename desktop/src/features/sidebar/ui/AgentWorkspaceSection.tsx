@@ -28,6 +28,7 @@ import {
 } from "../lib/agentWorkspaceExpansion";
 import { ChannelContextMenuItems } from "./ChannelContextMenu";
 import { ChannelMenuButton } from "./SidebarSection";
+import { SectionQuickAction } from "./CustomChannelSection";
 
 type ChannelActions = Pick<
   React.ComponentProps<typeof ChannelContextMenuItems>,
@@ -119,10 +120,12 @@ function AgentWorkspaceRow({
 function AgentWorkspaceTree({
   groups,
   storageKey,
+  onCreateLocalAgent,
   ...rowProps
 }: RowProps & {
   groups: AgentWorkspaceGroup[];
   storageKey: string;
+  onCreateLocalAgent: () => void;
 }) {
   const [collapsed, setCollapsed] = React.useState(() =>
     readAgentWorkspaceExpansion(storageKey),
@@ -144,8 +147,20 @@ function AgentWorkspaceTree({
     return () => window.removeEventListener("storage", handler);
   }, [storageKey]);
   return (
-    <SidebarGroup className="select-none" data-testid="agent-workspaces">
-      <SidebarGroupLabel>Agent managers</SidebarGroupLabel>
+    <SidebarGroup
+      className="group/sidebar-section select-none"
+      data-testid="agent-workspaces"
+    >
+      <div className="relative">
+        <SidebarGroupLabel>Agent managers</SidebarGroupLabel>
+        <div className="absolute right-1 top-1/2 z-10 flex -translate-y-1/2">
+          <SectionQuickAction
+            label="Create local agent"
+            onClick={onCreateLocalAgent}
+            testId="create-local-agent"
+          />
+        </div>
+      </div>
       <SidebarGroupContent>
         {groups.map(({ manager, record, tasks }) => {
           const isCollapsed = collapsed[manager.id] ?? false;
@@ -213,19 +228,22 @@ export function AgentWorkspaceSection({
   relayUrl,
   currentPubkey,
   groups,
+  onCreateLocalAgent,
   ...props
 }: RowProps & {
   relayUrl?: string;
   currentPubkey?: string;
   groups: AgentWorkspaceGroup[];
+  onCreateLocalAgent: () => void;
 }) {
-  if (!relayUrl || !currentPubkey || groups.length === 0) return null;
+  if (!relayUrl || !currentPubkey) return null;
   const storageKey = agentWorkspaceExpansionKey(relayUrl, currentPubkey);
   return (
     <AgentWorkspaceTree
       key={storageKey}
       storageKey={storageKey}
       groups={groups}
+      onCreateLocalAgent={onCreateLocalAgent}
       {...props}
     />
   );
