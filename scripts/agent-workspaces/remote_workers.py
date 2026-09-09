@@ -291,8 +291,16 @@ def run_component(config, component, slug=None):
     if component == 'watch':
         argv = [tools['watcher'], 'buzz-watch', '--keyfile', str(root / '.buzz-key'),
                 '--relay', http_relay(config['relay']), '--binary', tools['buzz'],
-                '--subscribe', 'joined', '--state-file', str(root / 'watcher-state.json'),
-                '--receipt-channel', config['channel'], '--receipt-dms']
+                '--subscribe', 'joined', '--state-file', str(root / 'watcher-state.json')]
+        # `channel` is written by configure, and nothing gates the start path on a
+        # configured manager -- `buzz-manager start` enables all four units whether
+        # or not configure has run. Indexing it here turns "started before
+        # configure" into a KeyError inside the watcher, which is Restart=always
+        # with no start limit: a permanent crash-loop that never reaches `failed`
+        # while inbox.log simply never fills. Receipts are worth having; they are
+        # not worth the inbox.
+        if config.get('channel'):
+            argv += ['--receipt-channel', config['channel'], '--receipt-dms']
         with (root / 'inbox.log').open('a') as out, (root / 'watch.err').open('a') as err:
             os.dup2(out.fileno(), 1)
             os.dup2(err.fileno(), 2)
