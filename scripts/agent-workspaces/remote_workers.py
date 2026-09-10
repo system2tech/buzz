@@ -291,7 +291,17 @@ def run_component(config, component, slug=None):
     if component == 'watch':
         argv = [tools['watcher'], 'buzz-watch', '--keyfile', str(root / '.buzz-key'),
                 '--relay', http_relay(config['relay']), '--binary', tools['buzz'],
-                '--subscribe', 'joined', '--state-file', str(root / 'watcher-state.json')]
+                # `room`, not `joined`. Under `joined` a thread reply wakes the
+                # watcher only if this identity is already in that thread -- the
+                # right default for a person, wrong for a manager. Coordination
+                # channels are threaded per topic, so a thread opened by someone
+                # else stays invisible until this manager happens to post in it,
+                # and it cannot post in what it cannot see. The harness says so
+                # itself in buzz_watch.py: "A manager needs to see every message
+                # in its channels ... The per-thread gate defeats that."
+                # A manager that silently misses whole conversations is worse than
+                # one that wakes more often.
+                '--subscribe', 'room', '--state-file', str(root / 'watcher-state.json')]
         # `channel` is written by configure, and nothing gates the start path on a
         # configured manager -- `buzz-manager start` enables all four units whether
         # or not configure has run. Indexing it here turns "started before

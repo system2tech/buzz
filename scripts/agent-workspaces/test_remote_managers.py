@@ -638,6 +638,28 @@ class SourceProvenanceTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn('UNEXPECTED hand_edit.py', out)
         self.assertNotIn('previous', out)
+    def test_managed_watcher_subscribes_in_manager_mode(self):
+        """`joined` gates thread replies to threads this identity already joined.
+
+        Coordination channels are threaded per topic, so under `joined` a thread
+        opened by another manager never wakes this one -- and it cannot join a
+        thread it has not seen. `room` lifts the per-thread gate, which is what
+        the harness itself prescribes for a manager.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.buzz-key').write_text('not-a-real-key')
+            config = {'root': str(root), 'user': 'harri', 'prefix': '/opt/buzz-manager',
+                      'relay': 'wss://buzz.example.test', 'channel': 'control-channel',
+                      'tools': {'watcher': '/tools/watcher', 'buzz': '/tools/buzz'}}
+            with patch.object(workers, 'runtime_env', return_value={}), \
+                 patch.object(workers.os, 'dup2'), \
+                 patch.object(workers.os, 'execve', side_effect=RuntimeError) as execute:
+                with self.assertRaises(RuntimeError):
+                    workers.run_component(config, 'watch')
+            argv = execute.call_args.args[1]
+            self.assertEqual(argv[argv.index('--subscribe') + 1], 'room')
+            self.assertNotIn('joined', argv)
 
 
 if __name__ == '__main__':
