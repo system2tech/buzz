@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Install root-owned shared tooling; preserve all existing manager services."""
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 
-from manager_common import REGISTRY, atomic, load_json, save_json
+from manager_common import (REGISTRY, atomic, load_json, save_json,
+                            verify_installation)
 
 FILES = ('manager_common.py', 'remote_manager.py', 'remote_workers.py',
          'manager_identity.py', 'workspace_reporter.py', 'supervise-manager.sh')
@@ -62,6 +64,62 @@ def source_provenance(source):
     return {'commit': commit, 'branch': branch, 'dirty': changes != ''}
 
 
+def installed_digests(prefix):
+    """Digest every file this installer placed, so an exposed account can check.
+
+    `installed-source.json` records which commit was installed, which answers
+    "is this current". It cannot answer "is what landed actually that commit" --
+    the copy could be partial, or a file could have been edited in place
+    afterwards, and neither shows in the commit field or in mtimes.
+
+    Verifying that needs a clone of the repo to diff against, and the accounts
+    most exposed to a bad deploy are the ones least likely to have one: on
+    2026-09-09 the box running the managers could not read the deployer's
+    checkout, so the strongest check was available only to the machines with no
+    exposure. Recording the digests here moves that check to where the risk is
+    -- anyone can hash `lib/*` and compare, with no clone and no need to trust
+    another party's conclusion.
+
+    Digests the file as it now sits on disk rather than the source content, so
+    a truncated or failed write is visible rather than assumed away.
+
+    **Covers the installed payload (`FILES`) and nothing else.** The installer
+    also writes `.previous` backups beside them, and those are deliberately
+    absent: their digests can never match the merged tree, so including them
+    would give a verifier permanent mismatches to learn to ignore. "Written" and
+    "installed" are not the same set here, and the difference reads as
+    equivalent right up until someone implements against it.
+
+    **Verify manifest-first, not directory-first.** `lib/` holds backups and
+    `__pycache__` as well, so a directory glob compares nine unrelated entries
+    against six and emits an error line for the directory. The manifest is the
+    authority on what should be there:
+
+        python3 - <<'EOF'
+        import hashlib, json, pathlib
+        m = json.load(open('/etc/buzz-managers/installed-source.json'))['files']
+        lib = pathlib.Path('/opt/buzz-manager/lib')
+        for name, want in m.items():
+            got = hashlib.sha256((lib / name).read_bytes()).hexdigest()
+            print(('MATCH' if got == want else 'DIFFERS'), name)
+        EOF
+
+    That direction finds missing or altered files. The opposite direction --
+    listing `lib/` and flagging anything the manifest does not name, other than
+    `.previous` backups and `__pycache__` -- finds files that should not be
+    there at all, such as a hand edit or a backup mistaken for live code. The
+    two catch different faults and neither is complete alone.
+    """
+    digests = {}
+    for name in FILES:
+        target = prefix / 'lib' / name
+        try:
+            digests[name] = hashlib.sha256(target.read_bytes()).hexdigest()
+        except OSError as error:
+            digests[name] = f'unreadable: {error}'
+    return digests
+
+
 def install_guides(source, prefix):
     """Install the operational Markdown snapshot beside the shared command."""
     docs = source.parent.parent / 'docs'
@@ -88,9 +146,21 @@ def install_guides(source, prefix):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--prefix', default='/opt/buzz-manager')
-    for name in ('python', 'buzz', 'bridge', 'watcher', 'claude', 'adapter'):
-        parser.add_argument('--' + name, required=True)
+    parser.add_argument('--verify', action='store_true',
+                        help='check the installed files against the recorded manifest '
+                             'and exit: 0 verified, 1 failed, 2 unverifiable')
+    tool_names = ('python', 'buzz', 'bridge', 'watcher', 'claude', 'adapter')
+    for name in tool_names:
+        parser.add_argument('--' + name)
     args = parser.parse_args()
+    # Verifying is read-only and needs no toolchain, so the install arguments are
+    # required for installing rather than for running the command at all.
+    if args.verify:
+        raise SystemExit(verify_installation(Path(args.prefix)))
+    absent = [name for name in tool_names if getattr(args, name) is None]
+    if absent:
+        parser.error('the following arguments are required: '
+                     + ', '.join('--' + name for name in absent))
     if os.geteuid() != 0:
         parser.error('Install as root')
     prefix = Path(args.prefix)
@@ -146,6 +216,7 @@ def main():
     install_guides(source, prefix)
     save_json(REGISTRY / 'installation.json', desired, 0o644)
     provenance = source_provenance(source)
+    provenance['files'] = installed_digests(prefix)
     save_json(REGISTRY / 'installed-source.json', provenance, 0o644)
     print(f'Installed {launcher}; no existing services were restarted')
     if provenance['commit'] is None:

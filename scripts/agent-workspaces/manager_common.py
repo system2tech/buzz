@@ -250,6 +250,56 @@ def mint_pair(root, stem):
     return key
 
 
+def verify_installation(prefix, registry=REGISTRY):
+    """Compare the installed files against the manifest. Three outcomes, not two.
+
+    **"Cannot verify" must never fold into "verified".** An install written
+    before this manifest existed has no `files` key, and a verifier written the
+    natural way -- iterating `record.get('files', {})` -- then checks nothing
+    and reports success. That is the failure this whole feature exists to
+    remove, reappearing inside it, and in its most reassuring form.
+
+    Exit codes are distinct so a caller cannot collapse them by accident:
+    0 verified, 1 failed, 2 unverifiable.
+
+    Both directions are checked. The manifest finds files that are missing or
+    altered; listing the directory finds files that should not be there at all,
+    such as a hand edit or a `.previous` backup mistaken for live code. Neither
+    alone is complete.
+    """
+    try:
+        record = load_json(registry / 'installed-source.json')
+    except (OSError, ValueError) as error:
+        print(f'UNVERIFIABLE no install record: {error}')
+        return 2
+    digests = record.get('files')
+    if not digests:
+        print('UNVERIFIABLE the install record has no file manifest; it predates '
+              'this check, or was not written by this installer. Reinstall to '
+              'produce one -- do not read this as a pass.')
+        return 2
+    lib, bad = Path(prefix) / 'lib', []
+    for name in sorted(digests):
+        try:
+            got = hashlib.sha256((lib / name).read_bytes()).hexdigest()
+        except OSError as error:
+            bad.append(f'{name}: unreadable: {error}')
+            continue
+        if got != digests[name]:
+            bad.append(f'{name}: on disk {got[:12]}…, manifest {digests[name][:12]}…')
+    unexpected = sorted(entry.name for entry in lib.iterdir()
+                        if entry.is_file() and entry.name not in digests
+                        and not entry.name.endswith('.previous'))
+    for name in unexpected:
+        print(f'UNEXPECTED {name} is present in lib/ and not named by the manifest')
+    if bad:
+        for line in bad:
+            print(f'FAILED {line}')
+        return 1
+    print(f'VERIFIED {len(digests)} files match the manifest for commit '
+          f'{(record.get("commit") or "unknown")[:9]}')
+    return 0
+
 def auth_tag(key, agent):
     if not HEX.fullmatch(agent) or pubkey(key) == agent:
         raise ValueError('Owner and agent must be distinct valid public identities')
