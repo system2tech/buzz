@@ -436,9 +436,32 @@ class MultiUserTests(unittest.TestCase):
                     workers.run_component(config, 'watch')
             argv = execute.call_args.args[1]
             self.assertIn('--receipt-dms', argv)
+            self.assertIn('--quiet-own-echo', argv)
             self.assertEqual(argv[argv.index('--receipt-channel') + 1], 'control-channel')
             self.assertEqual(argv[argv.index('--state-file') + 1],
                              str(root / 'watcher-state.json'))
+
+    def test_remote_watcher_keeps_own_sends_off_the_manager_inbox(self):
+        """Self receipts are useful in watch.err but are not incoming work.
+
+        ``buzz-watch`` already proves that quiet-own-echo moves only exact
+        identity matches to its debug sink while preserving real incoming
+        lines. This fixture holds the manager integration: its stdout is the
+        Claude Monitor's inbox, so every managed watcher must enable that gate.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.buzz-key').write_text('not-a-real-key')
+            config = {'root': str(root), 'user': 'khoi', 'prefix': '/opt/buzz-manager',
+                      'relay': 'wss://buzz.example.test', 'channel': 'control-channel',
+                      'tools': {'watcher': '/tools/watcher', 'buzz': '/tools/buzz'}}
+            with patch.object(workers, 'runtime_env', return_value={'HOME': '/home/user'}), \
+                 patch.object(workers.os, 'dup2'), \
+                 patch.object(workers.os, 'execve', side_effect=RuntimeError) as execute:
+                with self.assertRaises(RuntimeError):
+                    workers.run_component(config, 'watch')
+            argv = execute.call_args.args[1]
+            self.assertIn('--quiet-own-echo', argv)
 
 
 class SourceProvenanceTests(unittest.TestCase):
