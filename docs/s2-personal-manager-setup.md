@@ -8,7 +8,7 @@ There are two stages: **prepared** means the account and runtime exist; **runnin
 
 ## 1. Prepare the account — a root operator or their agent
 
-Get the current agent-server address from Verda — or, without console access, from [the recorded addresses](s2-operations.md#current-server-addresses) — and the relay WebSocket URL from the deployed configuration. Use the installed `/opt/buzz-manager/bin/buzz-manager`; check its `--help` before proceeding. If it is missing, an operator installs it using [the shared-tooling step](#install-the-shared-tooling-once) below.
+Get the current agent-server address from Verda (or from a team member with console access) and the relay WebSocket URL from the deployed configuration. Use the installed `/opt/buzz-manager/bin/buzz-manager`; check its `--help` before proceeding. If it is missing, an operator installs it using [the shared-tooling step](#install-the-shared-tooling-once) below.
 
 As root on the agent server, first run `buzz-manager status --all` when the tool is installed. Reuse the person's existing prepared account; do not create a second account just because its username differs from their display name.
 
@@ -153,7 +153,7 @@ The manager uses its own retained key and joins the relay directly through a nor
 3. Beside **Public key**, use the copy button. It copies the full public key in hex; use it for the public-key prompt below.
 4. Do not reveal or copy the private key. Manager setup does not need it.
 
-**Agent:** use the shared [workspace onboarding invite](https://buzz.system2ai.com/invite/v2.2USjGtVn9uNdOiEPLIgJu-T0KOmQbow86hxRITozIco). It may be reused until it expires on 2026-10-09 at 08:09 UTC. If Buzz rejects it as expired or invalid, ask an owner or admin to replace the link in both manager onboarding guides. The manager configuration does not retain the invite.
+**Agent:** ask a Buzz owner or admin for an unused relay invite, delivered privately (never committed to this repository, which is public). The manager configuration does not retain the invite.
 
 The public-key label above was checked against this fork's [profile controls](../desktop/src/features/settings/ui/ProfileSettingsCard.tsx).
 
@@ -166,7 +166,7 @@ IFS= read -r HUMAN_PUBKEY
 /opt/buzz-manager/bin/buzz-manager status
 ```
 
-`configure` asks for the workspace onboarding invite, claims it with the manager's own key, creates the personal channel, adds your public identity as an owner, and joins the manager to the single active open `#agent-managers` channel. Setup stops if that channel is missing or ambiguous. No channel ID is hard-coded. Do not consider onboarding complete until `status` confirms that coordination-channel membership. For unattended setup, put only the invite link in a temporary file and add `--invite-file "$INVITE_FILE"`; remove that file after a successful claim.
+`configure` asks for the invite, claims it with the manager's own key, creates the personal channel, adds your public identity as an owner, and joins the manager to the single active open `#agent-managers` channel. Setup stops if that channel is missing or ambiguous. No channel ID is hard-coded. Do not consider onboarding complete until `status` confirms that coordination-channel membership. For unattended setup, put only the invite link in a temporary file and add `--invite-file "$INVITE_FILE"`; remove that file after a successful claim.
 
 The manager is a direct relay member and remains discoverable to other humans. New workers are authorized with the manager's own key; your private key is never read or saved. Existing owned-manager installations remain supported and are not changed automatically. Migrate one only after preserving its key, channel, session ID and worker registry, then verify a real manager reply and worker spawn.
 
