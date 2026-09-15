@@ -638,28 +638,71 @@ class SourceProvenanceTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn('UNEXPECTED hand_edit.py', out)
         self.assertNotIn('previous', out)
-    def test_managed_watcher_subscribes_in_manager_mode(self):
-        """`joined` gates thread replies to threads this identity already joined.
+    def _watch_argv(self, directory, **extra):
+        """Run the watch component far enough to capture its argv."""
+        root = Path(directory)
+        (root / '.buzz-key').write_text('not-a-real-key')
+        config = {'root': str(root), 'user': 'harri', 'prefix': '/opt/buzz-manager',
+                  'relay': 'wss://buzz.example.test', 'channel': 'control-channel',
+                  'tools': {'watcher': '/tools/watcher', 'buzz': '/tools/buzz'}}
+        config.update(extra)
+        with patch.object(workers, 'runtime_env', return_value={}), \
+             patch.object(workers.os, 'dup2'), \
+             patch.object(workers.os, 'execve', side_effect=RuntimeError) as execute:
+            with self.assertRaises(RuntimeError):
+                workers.run_component(config, 'watch')
+        return execute.call_args.args[1]
 
-        Coordination channels are threaded per topic, so under `joined` a thread
-        opened by another manager never wakes this one -- and it cannot join a
-        thread it has not seen. `room` lifts the per-thread gate, which is what
-        the harness itself prescribes for a manager.
+    def test_managed_watcher_subscribes_joined_by_default(self):
+        """`joined` is Buzz's own rule, and the recommended default.
+
+        It briefly read `room`, on the claim that a thread another manager opened
+        never wakes this one. That is false: a message opening a thread has no
+        root yet, so it is top-level and wakes every member -- and a mention
+        pierces the thread gate in every mode. `room` therefore bought only
+        awareness of conversations nobody addressed to this manager, charged to
+        every manager on every reply.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            argv = self._watch_argv(directory)
+        self.assertEqual(argv[argv.index('--subscribe') + 1], 'joined')
+        self.assertNotIn('room', argv)
+
+    def test_managed_watcher_subscribe_mode_is_overridable(self):
+        """Recommended default, not an enforced one -- an owner may choose."""
+        with tempfile.TemporaryDirectory() as directory:
+            argv = self._watch_argv(directory, subscribe='room')
+        self.assertEqual(argv[argv.index('--subscribe') + 1], 'room')
+
+    def test_managed_watcher_rejects_unknown_subscribe_mode(self):
+        """A typo must not reach argparse.
+
+        The harness declares `choices`, so an unknown mode exits 2 inside a unit
+        that is Restart=always with no start limit: a permanent crash-loop that
+        never reaches `failed` while inbox.log never fills. Fail where it is
+        readable instead.
         """
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / '.buzz-key').write_text('not-a-real-key')
             config = {'root': str(root), 'user': 'harri', 'prefix': '/opt/buzz-manager',
                       'relay': 'wss://buzz.example.test', 'channel': 'control-channel',
+                      'subscribe': 'rooom',
                       'tools': {'watcher': '/tools/watcher', 'buzz': '/tools/buzz'}}
             with patch.object(workers, 'runtime_env', return_value={}), \
                  patch.object(workers.os, 'dup2'), \
-                 patch.object(workers.os, 'execve', side_effect=RuntimeError) as execute:
-                with self.assertRaises(RuntimeError):
+                 patch.object(workers.os, 'execve') as execute:
+                with self.assertRaises(RuntimeError) as caught:
                     workers.run_component(config, 'watch')
-            argv = execute.call_args.args[1]
-            self.assertEqual(argv[argv.index('--subscribe') + 1], 'room')
-            self.assertNotIn('joined', argv)
+        self.assertIn('rooom', str(caught.exception))
+        execute.assert_not_called()
+
+    def test_managed_watcher_empty_subscribe_falls_back_to_joined(self):
+        """An empty string is a missing value, not a mode -- must not reach argparse."""
+        with tempfile.TemporaryDirectory() as directory:
+            argv = self._watch_argv(directory, subscribe='')
+        self.assertEqual(argv[argv.index('--subscribe') + 1], 'joined')
+
 
 
 if __name__ == '__main__':

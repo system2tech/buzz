@@ -11,6 +11,12 @@ from manager_common import (atomic, auth_tag, buzz, http_relay, human_pubkey,
                             load_json, pubkey, runtime_env, save_json, secret_key,
                             task_slug, worker_unit)
 
+#: What `--subscribe` accepts, mirroring `choices` on the harness argument
+#: (`s2harness/cli.py`). Kept here so a bad value in `manager.json` fails where
+#: the message can be read, rather than as argparse's SystemExit(2) inside a
+#: Restart=always unit.
+SUBSCRIBE_MODES = ('mentions', 'joined', 'room', 'all')
+
 
 def service(action, unit, check=True):
     argv = ['systemctl', action, unit]
@@ -289,19 +295,77 @@ def run_component(config, component, slug=None):
         os.chdir(root / 'manager')
         os.execve('/bin/bash', ['bash', str(prefix / 'supervise-manager.sh')], env)
     if component == 'watch':
+        # `joined` -- Buzz's own rule, and the harness default. Top-level messages
+        # wake every member of the channel, a mention pierces the thread gate in
+        # any mode, and a thread reply wakes that thread's participants.
+        #
+        # This read `room` between 7c38629e and this commit, on an argument that
+        # did not survive re-reading `wake_reason`: that a thread another manager
+        # opened never wakes this one, and that it cannot post into what it has
+        # not seen. Both are false.
+        #
+        #   * A message that opens a thread has no root yet, so it is top-level
+        #     and wakes every member. The start of a conversation is never missed;
+        #     what `joined` withholds is the replies.
+        #   * `p`-tag matching runs ahead of every thread and membership rule, so
+        #     a mention reaches a manager inside a thread it never joined -- in
+        #     every mode, `mentions` included.
+        #
+        # So sender-side targeting already worked, and `room` bought only
+        # awareness of conversations nobody addressed to this manager -- charged
+        # to every managed manager, on every reply, in every channel, and getting
+        # worse with each manager added. Both corrections were confirmed from two
+        # boxes' inboxes before this revert, not from the source alone: the one
+        # thread previously cited as "silently missed" had in fact arrived as a
+        # top-level root and been read and declined.
+        #
+        # The real gap the workaround reached for is the one the harness states
+        # about itself -- "no way to follow a thread without posting in it". That
+        # wants a follow primitive; blanket delivery is not a substitute, and the
+        # norm it violates is that top-level means "the room" and a thread means
+        # "these people".
+        #
+        # `joined` is the recommended default, not an enforced one. Harri's
+        # position, and it is the right line: recommend a default, do not police
+        # what an owner runs on their own box. So the mode stays overridable per
+        # manager via `subscribe` in manager.json -- an owner who wants something
+        # else can have it without patching the tooling.
+        #
+        # `room` is not offered as an equal: nothing needs it, because
+        # sender-side targeting already works -- *when the sender targets*. The
+        # condition matters and is easy to drop. Observed 2026-09-11: an untagged
+        # thread reply naming its recipient only in prose, in a thread that
+        # recipient had not entered, woke nobody under `joined`; the tagged retry
+        # 77s later woke them in 27s.
+        #
+        # That is a real property of `joined`, recorded here rather than left in a
+        # channel, because it is the fact this default will next be argued against
+        # and it should be argued against accurately. It does not change the
+        # default: the human noticed within 91 seconds from the absence of a
+        # reply, so it is a slow round trip, not a silent loss -- and answering
+        # "senders sometimes forget to tag" with "deliver everything to everyone"
+        # costs every manager every reply in every channel, permanently, which is
+        # the thing being objected to.
+        #
+        # `all` is NOT a broader `room` -- they differ in kind, not degree. `all`
+        # returns before the membership check and wakes on every visible channel
+        # including ones you are not in, so it scales with the relay; `room`
+        # scales with your own membership. On a large relay `all` is the one that
+        # cannot be used carefully at all.
+        subscribe = config.get('subscribe') or 'joined'
+        if subscribe not in SUBSCRIBE_MODES:
+            # The harness declares `choices`, so argparse would reject this with
+            # SystemExit(2) -- inside a unit that is Restart=always with no start
+            # limit. That is a permanent crash-loop which never reaches `failed`
+            # while inbox.log simply never fills, the same silent shape the
+            # `channel` guard below exists to prevent. Fail here instead, where
+            # the reason is legible.
+            raise RuntimeError(
+                f"manager.json 'subscribe' is {subscribe!r}; expected one of "
+                f"{', '.join(SUBSCRIBE_MODES)}")
         argv = [tools['watcher'], 'buzz-watch', '--keyfile', str(root / '.buzz-key'),
                 '--relay', http_relay(config['relay']), '--binary', tools['buzz'],
-                # `room`, not `joined`. Under `joined` a thread reply wakes the
-                # watcher only if this identity is already in that thread -- the
-                # right default for a person, wrong for a manager. Coordination
-                # channels are threaded per topic, so a thread opened by someone
-                # else stays invisible until this manager happens to post in it,
-                # and it cannot post in what it cannot see. The harness says so
-                # itself in buzz_watch.py: "A manager needs to see every message
-                # in its channels ... The per-thread gate defeats that."
-                # A manager that silently misses whole conversations is worse than
-                # one that wakes more often.
-                '--subscribe', 'room', '--state-file', str(root / 'watcher-state.json')]
+                '--subscribe', subscribe, '--state-file', str(root / 'watcher-state.json')]
         # `channel` is written by configure, and nothing gates the start path on a
         # configured manager -- `buzz-manager start` enables all four units whether
         # or not configure has run. Indexing it here turns "started before
