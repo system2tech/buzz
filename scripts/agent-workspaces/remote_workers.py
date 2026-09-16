@@ -365,7 +365,13 @@ def run_component(config, component, slug=None):
                 f"{', '.join(SUBSCRIBE_MODES)}")
         argv = [tools['watcher'], 'buzz-watch', '--keyfile', str(root / '.buzz-key'),
                 '--relay', http_relay(config['relay']), '--binary', tools['buzz'],
-                '--subscribe', subscribe, '--state-file', str(root / 'watcher-state.json')]
+                '--subscribe', subscribe, '--state-file', str(root / 'watcher-state.json'),
+                # The manager's Monitor tails inbox.log, which is this process's
+                # stdout. A sent-confirmation there is therefore delivered as if
+                # somebody else had asked the manager to act. Keep exact-pubkey
+                # self echoes in watch.err; inbound messages still use stdout,
+                # including when both kinds arrive in the same polling cycle.
+                '--quiet-own-echo']
         # `channel` is written by configure, and nothing gates the start path on a
         # configured manager -- `buzz-manager start` enables all four units whether
         # or not configure has run. Indexing it here turns "started before
